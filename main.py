@@ -15,6 +15,18 @@ app = FastAPI()
 beacons = {}
 
 poi_locations = {
+    "box_office": {
+        "id": "box_office",
+        "name": "To Box Office",
+        "category": "Entrances",
+        "map_x": 0.86,
+        "map_y": 0.10,
+        "latitude": None,
+        "longitude": None,
+        "accuracy_meters": None,
+        "updated_at": None,
+        "updated_by": None,
+    },
     "medical": {
         "id": "medical",
         "name": "Medical",
