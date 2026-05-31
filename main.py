@@ -87,6 +87,27 @@ class BeaconCreate(BaseModel):
     updated_by: Optional[str] = "android_quickfinder"
 
 
+class WrstopsGateCreate(BaseModel):
+    name: str = Field(default="Gate", min_length=1, max_length=120)
+    map_x: float = Field(ge=0.0, le=1.0)
+    map_y: float = Field(ge=0.0, le=1.0)
+    scan_count: Optional[int] = 0
+    connection_status: Optional[str] = Field(default="ONLINE", max_length=40)
+    ip_address: Optional[str] = Field(default=None, max_length=80)
+    override_status: Optional[str] = Field(default="NORMAL", max_length=40)
+    updated_by: Optional[str] = "android_wrstops"
+
+
+class WrstopsGateUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    scan_count: Optional[int] = None
+    connection_status: Optional[str] = Field(default=None, max_length=40)
+    ip_address: Optional[str] = Field(default=None, max_length=80)
+    override_status: Optional[str] = Field(default=None, max_length=40)
+    updated_by: Optional[str] = "android_wrstops"
+
 
 class InferGpsRequest(BaseModel):
     anchor_ids: Optional[List[str]] = None
@@ -134,6 +155,26 @@ def beacon_row_to_dict(row: sqlite3.Row) -> dict:
         "latitude": row["latitude"],
         "longitude": row["longitude"],
         "accuracy_meters": row["accuracy_meters"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        # Android compatibility aliases.
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "scan_count": row["scan_count"],
+        "connection_status": row["connection_status"],
+        "ip_address": row["ip_address"],
+        "override_status": row["override_status"],
+        "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
     }
@@ -194,6 +235,32 @@ def init_db():
                 updated_at TEXT NOT NULL,
                 updated_by TEXT
             )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wrstops_gates (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                map_x REAL NOT NULL,
+                map_y REAL NOT NULL,
+                scan_count INTEGER NOT NULL DEFAULT 0,
+                connection_status TEXT NOT NULL DEFAULT 'ONLINE',
+                ip_address TEXT,
+                override_status TEXT NOT NULL DEFAULT 'NORMAL',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_wrstops_gates_event_id
+            ON wrstops_gates(event_id)
             """
         )
 
@@ -369,12 +436,14 @@ def health():
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM pois").fetchone()["count"]
         beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
+        wrstops_gate_count = conn.execute("SELECT COUNT(*) AS count FROM wrstops_gates").fetchone()["count"]
 
     return {
         "status": "ok",
         "database_path": DATABASE_PATH,
         "poi_count": count,
         "beacon_count": beacon_count,
+        "wrstops_gate_count": wrstops_gate_count,
         "time": now_iso(),
     }
 
@@ -676,6 +745,152 @@ def delete_quickfinder_beacon(code: str):
         conn.commit()
 
     return {"deleted": True, "code": clean_code}
+
+
+@app.get("/events/{event_id}/wrstops-gates")
+def get_wrstops_gates(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM wrstops_gates
+            WHERE event_id = ?
+            ORDER BY name COLLATE NOCASE ASC
+            """,
+            (event_id,),
+        ).fetchall()
+
+    return [wrstops_gate_row_to_dict(row) for row in rows]
+
+
+@app.post("/events/{event_id}/wrstops-gates")
+def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
+    gate_id = "wrstops_" + uuid4().hex[:12]
+    timestamp = now_iso()
+    name = payload.name.strip() or "Gate"
+    scan_count = payload.scan_count if payload.scan_count is not None else 0
+    connection_status = (payload.connection_status or "ONLINE").strip().upper() or "ONLINE"
+    override_status = (payload.override_status or "NORMAL").strip().upper() or "NORMAL"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO wrstops_gates (
+                id, event_id, name, map_x, map_y, scan_count,
+                connection_status, ip_address, override_status,
+                created_at, updated_at, updated_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                gate_id,
+                event_id,
+                name,
+                payload.map_x,
+                payload.map_y,
+                scan_count,
+                connection_status,
+                payload.ip_address,
+                override_status,
+                timestamp,
+                timestamp,
+                payload.updated_by,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            (gate_id, event_id),
+        ).fetchone()
+
+    return wrstops_gate_row_to_dict(row)
+
+
+@app.put("/events/{event_id}/wrstops-gates/{gate_id}")
+def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            (gate_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="WRSTOPS gate not found")
+
+        name = payload.name.strip() if payload.name is not None else existing["name"]
+        map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
+        map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+        scan_count = payload.scan_count if payload.scan_count is not None else existing["scan_count"]
+        connection_status = (
+            payload.connection_status.strip().upper()
+            if payload.connection_status is not None
+            else existing["connection_status"]
+        )
+        ip_address = payload.ip_address if payload.ip_address is not None else existing["ip_address"]
+        override_status = (
+            payload.override_status.strip().upper()
+            if payload.override_status is not None
+            else existing["override_status"]
+        )
+
+        conn.execute(
+            """
+            UPDATE wrstops_gates
+            SET
+                name = ?,
+                map_x = ?,
+                map_y = ?,
+                scan_count = ?,
+                connection_status = ?,
+                ip_address = ?,
+                override_status = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ? AND event_id = ?
+            """,
+            (
+                name or existing["name"],
+                map_x,
+                map_y,
+                scan_count,
+                connection_status or "ONLINE",
+                ip_address,
+                override_status or "NORMAL",
+                now_iso(),
+                payload.updated_by,
+                gate_id,
+                event_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            (gate_id, event_id),
+        ).fetchone()
+
+    return wrstops_gate_row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/wrstops-gates/{gate_id}")
+def delete_wrstops_gate(event_id: str, gate_id: str):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            (gate_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="WRSTOPS gate not found")
+
+        conn.execute(
+            "DELETE FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            (gate_id, event_id),
+        )
+        conn.commit()
+
+    return {"deleted": True, "id": gate_id, "event_id": event_id}
 
 
 @app.post("/calibration/infer-gps")
