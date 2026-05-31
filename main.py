@@ -76,6 +76,18 @@ class LocationUpdate(BaseModel):
     updated_by: Optional[str] = "android_admin"
 
 
+class BeaconCreate(BaseModel):
+    # The Android client currently lets the server generate the code.
+    # code remains optional so older clients that provide one still work.
+    code: Optional[str] = Field(default=None, max_length=24)
+    name: Optional[str] = Field(default="Shared Location", max_length=120)
+    latitude: float
+    longitude: float
+    accuracy_meters: Optional[float] = None
+    updated_by: Optional[str] = "android_quickfinder"
+
+
+
 class InferGpsRequest(BaseModel):
     anchor_ids: Optional[List[str]] = None
     overwrite_existing: bool = False
@@ -114,6 +126,42 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def beacon_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "code": row["code"],
+        "id": row["code"],  # Android compatibility alias.
+        "name": row["name"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def normalize_beacon_code(code: str) -> str:
+    cleaned = "".join(ch for ch in code.upper().strip() if ch.isalnum())
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Missing beacon code")
+    return cleaned[:24]
+
+
+def generate_beacon_code(conn: sqlite3.Connection) -> str:
+    # 6 hex chars is simple and readable enough for testing. Retry on the tiny
+    # chance of collision.
+    for _ in range(20):
+        code = uuid4().hex[:6].upper()
+        exists = conn.execute(
+            "SELECT 1 FROM quickfinder_beacons WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if exists is None:
+            return code
+
+    # Practically unreachable fallback.
+    return uuid4().hex[:10].upper()
+
+
 def init_db():
     with get_connection() as conn:
         conn.execute(
@@ -131,6 +179,20 @@ def init_db():
                 updated_at TEXT,
                 updated_by TEXT,
                 gps_source TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quickfinder_beacons (
+                code TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                accuracy_meters REAL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT
             )
             """
         )
@@ -306,11 +368,13 @@ def root():
 def health():
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM pois").fetchone()["count"]
+        beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
 
     return {
         "status": "ok",
         "database_path": DATABASE_PATH,
         "poi_count": count,
+        "beacon_count": beacon_count,
         "time": now_iso(),
     }
 
@@ -532,6 +596,86 @@ def delete_poi(poi_id: str):
         "deleted": True,
         "id": poi_id,
     }
+
+
+@app.post("/beacons")
+def create_quickfinder_beacon(payload: BeaconCreate):
+    timestamp = now_iso()
+
+    with get_connection() as conn:
+        code = normalize_beacon_code(payload.code) if payload.code else generate_beacon_code(conn)
+        name = (payload.name or "Shared Location").strip() or "Shared Location"
+
+        conn.execute(
+            """
+            INSERT INTO quickfinder_beacons (
+                code, name, latitude, longitude, accuracy_meters, updated_at, updated_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(code) DO UPDATE SET
+                name = excluded.name,
+                latitude = excluded.latitude,
+                longitude = excluded.longitude,
+                accuracy_meters = excluded.accuracy_meters,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            (
+                code,
+                name,
+                payload.latitude,
+                payload.longitude,
+                payload.accuracy_meters,
+                timestamp,
+                payload.updated_by,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM quickfinder_beacons WHERE code = ?",
+            (code,),
+        ).fetchone()
+
+    return beacon_row_to_dict(row)
+
+
+@app.get("/beacons/{code}")
+def get_quickfinder_beacon(code: str):
+    clean_code = normalize_beacon_code(code)
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM quickfinder_beacons WHERE code = ?",
+            (clean_code,),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Beacon code not found")
+
+    return beacon_row_to_dict(row)
+
+
+@app.delete("/beacons/{code}")
+def delete_quickfinder_beacon(code: str):
+    clean_code = normalize_beacon_code(code)
+
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM quickfinder_beacons WHERE code = ?",
+            (clean_code,),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Beacon code not found")
+
+        conn.execute(
+            "DELETE FROM quickfinder_beacons WHERE code = ?",
+            (clean_code,),
+        )
+        conn.commit()
+
+    return {"deleted": True, "code": clean_code}
 
 
 @app.post("/calibration/infer-gps")
