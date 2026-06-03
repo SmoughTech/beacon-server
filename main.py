@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import sqlite3
@@ -11,8 +12,12 @@ from uuid import uuid4
 
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "beacon.db")
+STATIC_DIR = os.getenv("STATIC_DIR", "static")
+MAPS_DIR = os.path.join(STATIC_DIR, "maps")
 
-app = FastAPI(title="Beacon Server", version="3.1.0")
+os.makedirs(MAPS_DIR, exist_ok=True)
+
+app = FastAPI(title="Beacon Server", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +26,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 BUILT_IN_POIS = [
@@ -464,8 +471,8 @@ def health():
 
 
 EVENTS = [
-    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "description": "LIB event map and POI set."},
-    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "description": "Freedom 250 White House field test event."},
+    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "map_url": "/static/maps/lib_map.png", "description": "LIB event map and POI set."},
+    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "map_url": "/static/maps/f250_map.png", "description": "Freedom 250 White House field test event."},
 ]
 
 
@@ -515,7 +522,7 @@ async function api(path,opts={}){const res=await fetch(path,{headers:{'Content-T
 async function boot(){try{events=await api('/events')}catch(e){events=[{id:'lib_2026',name:"LIB '26",description:'LIB event map'},{id:'freedom_250',name:'Freedom 250',description:'Freedom 250 field test'}]}renderEvents();await refreshAll()}
 function renderEvents(){$('eventCards').innerHTML=events.map(ev=>`<button class="eventCard ${ev.id===selectedEventId?'active':''}" onclick="selectEvent('${esc(ev.id)}')"><b>${esc(ev.name)}</b><span>${esc(ev.description||ev.id)}</span></button>`).join('')}
 async function selectEvent(id){selectedEventId=id;renderEvents();await refreshAll()}function setTab(tab){selectedTab=tab;['pois','gates','beacons'].forEach(t=>$('tab-'+t).classList.toggle('active',t===tab));renderTable()}
-async function refreshAll(){const ev=events.find(e=>e.id===selectedEventId)||{name:selectedEventId};$('mapHeader').textContent=`${ev.name} Map Preview`;$('dataHeader').textContent=`${ev.name} Data`;const wrap=$('mapWrap');wrap.className=`mapWrap ${selectedEventId}`;$('mapTitle').textContent=ev.name;const showWh=selectedEventId==='freedom_250';$('whiteHouseBox').style.display=showWh?'grid':'none';$('ellipseBox').style.display=showWh?'block':'none';setStatus(`Loading ${ev.name}...`);try{const [p,g,b]=await Promise.all([api(`/events/${selectedEventId}/pois`),api(`/events/${selectedEventId}/wrstops-gates`),api('/beacons')]);pois=p;gates=g;beacons=b;renderMarkers();renderTable();setStatus(`Loaded ${pois.length} POIs, ${gates.length} WRSTOPS gates, ${beacons.length} Quickfinder codes.`)}catch(e){setStatus(`Load failed: ${e.message}`)}}
+async function refreshAll(){const ev=events.find(e=>e.id===selectedEventId)||{name:selectedEventId};$('mapHeader').textContent=`${ev.name} Map Preview`;$('dataHeader').textContent=`${ev.name} Data`;const wrap=$('mapWrap');wrap.className=`mapWrap ${selectedEventId}`;wrap.style.backgroundImage=ev.map_url?`url('${ev.map_url}')`:'';wrap.style.backgroundSize='contain';wrap.style.backgroundPosition='center';wrap.style.backgroundRepeat='no-repeat';$('mapTitle').textContent=ev.name;const showWh=selectedEventId==='freedom_250'&&!ev.map_url;$('whiteHouseBox').style.display=showWh?'grid':'none';$('ellipseBox').style.display=showWh?'block':'none';setStatus(`Loading ${ev.name}...`);try{const [p,g,b]=await Promise.all([api(`/events/${selectedEventId}/pois`),api(`/events/${selectedEventId}/wrstops-gates`),api('/beacons')]);pois=p;gates=g;beacons=b;renderMarkers();renderTable();setStatus(`Loaded ${pois.length} POIs, ${gates.length} WRSTOPS gates, ${beacons.length} Quickfinder codes.`)}catch(e){setStatus(`Load failed: ${e.message}`)}}
 function renderMarkers(){document.querySelectorAll('.marker').forEach(m=>m.remove());const wrap=$('mapWrap');pois.forEach(p=>{const el=document.createElement('div');el.className='marker poi';el.style.left=`${p.map_x*100}%`;el.style.top=`${p.map_y*100}%`;el.title=p.name;el.textContent='P';wrap.appendChild(el)});gates.forEach(g=>{const el=document.createElement('div');const off=g.connection_status!=='ONLINE'||g.override_status==='OFFLINE';el.className=`marker gate ${off?'offline':''}`;el.style.left=`${g.map_x*100}%`;el.style.top=`${g.map_y*100}%`;el.title=g.name;el.textContent='W';wrap.appendChild(el)})}
 function renderTable(){if(selectedTab==='pois')renderPois();if(selectedTab==='gates')renderGates();if(selectedTab==='beacons')renderBeacons()}
 function renderPois(){$('tableActions').innerHTML=`<button class="primary" onclick="openPoiModal('add')">+ Add POI</button>`;$('dataTable').innerHTML=`<table><thead><tr><th>Name</th><th>Category</th><th>Map</th><th>GPS</th><th>Actions</th></tr></thead><tbody>${pois.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="small">${esc(p.id)}</div></td><td>${esc(p.category)}</td><td>${num(p.map_x)}, ${num(p.map_y)}</td><td>${p.latitude?'<span class="pill good">GPS</span>':'<span class="pill warn">No GPS</span>'}</td><td><div class="actions"><button onclick="openPoiModal('edit','${esc(p.id)}')">Edit</button><button class="danger" onclick="deletePoi('${esc(p.id)}')">Delete</button></div></td></tr>`).join('')||'<tr><td colspan="5" class="small">No POIs saved for this event yet.</td></tr>'}</tbody></table>`}
