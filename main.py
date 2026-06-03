@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import sqlite3
@@ -11,7 +12,7 @@ from uuid import uuid4
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "beacon.db")
 
-app = FastAPI(title="Beacon Server", version="3.0.0")
+app = FastAPI(title="Beacon Server", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -460,6 +461,77 @@ def health():
         "wrstops_gate_count": wrstops_gate_count,
         "time": now_iso(),
     }
+
+
+EVENTS = [
+    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "description": "LIB event map and POI set."},
+    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "description": "Freedom 250 White House field test event."},
+]
+
+
+@app.get("/events")
+def get_events():
+    return EVENTS
+
+
+@app.get("/dash", response_class=HTMLResponse)
+def dash():
+    return HTMLResponse(DASH_HTML)
+
+
+DASH_HTML = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beacon Dash</title>
+  <style>
+    :root{--bg:#08111d;--panel:#101c2b;--muted:#8ea2b8;--text:#f5f8fc;--line:rgba(255,255,255,.12);--blue:#5db7ff;--green:#6df7a7;--yellow:#ffd166;--red:#ff6b6b}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text);background:radial-gradient(circle at top left,#14365a 0,var(--bg) 36rem)}
+    button,input,select{font:inherit} button{border:1px solid var(--line);border-radius:12px;background:#1d334f;color:var(--text);padding:9px 12px;cursor:pointer} button:hover{filter:brightness(1.12)}
+    button.primary{background:#1565c0;border-color:#4ea5ff} button.warn{background:#6c4a10;border-color:#ffd166} button.danger{background:#6b1e25;border-color:#ff6b6b} button.ghost{background:transparent}
+    input,select{width:100%;border:1px solid var(--line);border-radius:10px;background:#07101b;color:var(--text);padding:10px;outline:none} input:focus,select:focus{border-color:var(--blue)} label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+    .app{padding:18px;max-width:1500px;margin:0 auto}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand h1{margin:0;font-size:30px;letter-spacing:.04em}.brand p{margin:3px 0 0;color:var(--muted)}
+    .eventCards{display:flex;gap:10px;flex-wrap:wrap}.eventCard{min-width:170px;text-align:left;background:rgba(16,28,43,.78)}.eventCard.active{outline:2px solid var(--green);background:#12334a}.eventCard b{display:block;font-size:16px}.eventCard span{color:var(--muted);font-size:12px}
+    .grid{display:grid;grid-template-columns:minmax(320px,.9fr) minmax(480px,1.1fr);gap:16px}@media(max-width:980px){.grid{grid-template-columns:1fr}}
+    .panel{background:rgba(16,28,43,.92);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 14px 30px rgba(0,0,0,.28)}.panelHeader{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.035)}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.tab.active{background:#224469;border-color:var(--blue)}
+    .mapWrap{position:relative;width:100%;aspect-ratio:2500/1120;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:linear-gradient(135deg,#315c3b,#89b979 45%,#d9d0ba 45%,#dedbd0 54%,#6ea062 54%);user-select:none;cursor:crosshair}.mapWrap.freedom_250{background:radial-gradient(ellipse at 50% 78%,rgba(255,255,255,.24),rgba(255,255,255,0) 26%),linear-gradient(90deg,rgba(255,255,255,.16) 0 1px,transparent 1px),linear-gradient(180deg,rgba(255,255,255,.12) 0 1px,transparent 1px),linear-gradient(135deg,#153756,#1e5a46 20%,#91bd79 45%,#d7d2c5 48%,#9ec786 56%,#174064);background-size:auto,9% 100%,100% 16%,auto}.mapWrap.lib_2026{background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.25),transparent 20%),linear-gradient(135deg,#214f5e,#5e915f 34%,#dfc685 55%,#375b31)}
+    .mapTitle{position:absolute;left:12px;top:10px;padding:6px 9px;border-radius:10px;background:rgba(0,0,0,.45);font-size:12px;color:white;font-weight:800}.whiteHouse{position:absolute;left:42%;top:41%;width:16%;height:10%;border-radius:10px;background:rgba(255,255,255,.86);border:2px solid rgba(6,20,34,.5);display:grid;place-items:center;color:#123;font-size:12px;font-weight:800}.ellipse{position:absolute;left:33%;top:68%;width:34%;height:23%;border-radius:50%;border:2px solid rgba(255,255,255,.35);background:rgba(125,183,105,.35)}
+    .marker{position:absolute;transform:translate(-50%,-50%);display:grid;place-items:center;color:#07101b;font-size:10px;font-weight:900;box-shadow:0 5px 12px rgba(0,0,0,.35)}.marker.poi{width:20px;height:20px;border-radius:50%;background:var(--yellow);border:2px solid #fff}.marker.gate{width:22px;height:22px;border-radius:8px;background:var(--green);border:2px solid #07101b}.marker.offline{background:var(--red);color:white}.mapHint{color:var(--muted);font-size:12px;margin-top:8px}
+    table{width:100%;border-collapse:collapse}th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}tr:hover td{background:rgba(255,255,255,.035)}.small{font-size:12px;color:var(--muted)}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{padding:6px 8px;font-size:12px;border-radius:9px}.pill{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,255,255,.08)}.pill.good{color:var(--green)}.pill.bad{color:var(--red)}.pill.warn{color:var(--yellow)}.status{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.07);color:var(--muted);font-size:13px}
+    .modalBackdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}.modalBackdrop.show{display:flex}.modal{width:min(560px,100%);max-height:90vh;overflow:auto;border-radius:20px;background:#0d1826;border:1px solid var(--line);box-shadow:0 20px 60px rgba(0,0,0,.6)}.modalHeader{padding:16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.modalHeader h3{margin:0}.modalBody{padding:16px;display:grid;gap:12px}.formGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.formGrid .wide{grid-column:1/-1}.modalFooter{padding:16px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+  </style>
+</head>
+<body>
+<div class="app"><div class="topbar"><div class="brand"><h1>Beacon Dash</h1><p>Pure UI admin panel for events, POIs, WRSTOPS, and Quickfinder.</p></div><div class="eventCards" id="eventCards"></div></div>
+<div class="grid"><section class="panel"><div class="panelHeader"><h2 id="mapHeader">Map Preview</h2><button class="ghost" onclick="refreshAll()">Refresh</button></div><div class="panelBody"><div class="mapWrap" id="mapWrap" onclick="handleMapClick(event)"><div class="mapTitle" id="mapTitle">Select event</div><div class="whiteHouse" id="whiteHouseBox" style="display:none">White House</div><div class="ellipse" id="ellipseBox" style="display:none"></div></div><div class="mapHint">Click the map while an Add/Edit modal is open to set map_x/map_y.</div><div class="status" id="status">Loading Dash...</div></div></section>
+<section class="panel"><div class="panelHeader"><h2 id="dataHeader">Event Data</h2></div><div class="panelBody"><div class="tabs"><button class="tab active" id="tab-pois" onclick="setTab('pois')">POIs</button><button class="tab" id="tab-gates" onclick="setTab('gates')">WRSTOPS</button><button class="tab" id="tab-beacons" onclick="setTab('beacons')">Quickfinder</button></div><div id="tableActions"></div><div id="dataTable"></div></div></section></div></div>
+<div class="modalBackdrop" id="modalBackdrop"><div class="modal"><div class="modalHeader"><h3 id="modalTitle">Edit</h3><button class="ghost" onclick="closeModal()">✕</button></div><div class="modalBody" id="modalBody"></div><div class="modalFooter" id="modalFooter"></div></div></div>
+<script>
+let events=[],selectedEventId='freedom_250',selectedTab='pois',pois=[],gates=[],beacons=[],modalMode=null,modalKind=null,modalId=null;
+const $=id=>document.getElementById(id);function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));}function num(v,d=3){return v===null||v===undefined||v===''?'':Number(v).toFixed(d)}function setStatus(m){$('status').textContent=m}
+async function api(path,opts={}){const res=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});if(!res.ok){let detail='';try{detail=JSON.stringify(await res.json())}catch(e){detail=await res.text()}throw new Error(`${res.status}: ${detail}`)}return res.json()}
+async function boot(){try{events=await api('/events')}catch(e){events=[{id:'lib_2026',name:"LIB '26",description:'LIB event map'},{id:'freedom_250',name:'Freedom 250',description:'Freedom 250 field test'}]}renderEvents();await refreshAll()}
+function renderEvents(){$('eventCards').innerHTML=events.map(ev=>`<button class="eventCard ${ev.id===selectedEventId?'active':''}" onclick="selectEvent('${esc(ev.id)}')"><b>${esc(ev.name)}</b><span>${esc(ev.description||ev.id)}</span></button>`).join('')}
+async function selectEvent(id){selectedEventId=id;renderEvents();await refreshAll()}function setTab(tab){selectedTab=tab;['pois','gates','beacons'].forEach(t=>$('tab-'+t).classList.toggle('active',t===tab));renderTable()}
+async function refreshAll(){const ev=events.find(e=>e.id===selectedEventId)||{name:selectedEventId};$('mapHeader').textContent=`${ev.name} Map Preview`;$('dataHeader').textContent=`${ev.name} Data`;const wrap=$('mapWrap');wrap.className=`mapWrap ${selectedEventId}`;$('mapTitle').textContent=ev.name;const showWh=selectedEventId==='freedom_250';$('whiteHouseBox').style.display=showWh?'grid':'none';$('ellipseBox').style.display=showWh?'block':'none';setStatus(`Loading ${ev.name}...`);try{const [p,g,b]=await Promise.all([api(`/events/${selectedEventId}/pois`),api(`/events/${selectedEventId}/wrstops-gates`),api('/beacons')]);pois=p;gates=g;beacons=b;renderMarkers();renderTable();setStatus(`Loaded ${pois.length} POIs, ${gates.length} WRSTOPS gates, ${beacons.length} Quickfinder codes.`)}catch(e){setStatus(`Load failed: ${e.message}`)}}
+function renderMarkers(){document.querySelectorAll('.marker').forEach(m=>m.remove());const wrap=$('mapWrap');pois.forEach(p=>{const el=document.createElement('div');el.className='marker poi';el.style.left=`${p.map_x*100}%`;el.style.top=`${p.map_y*100}%`;el.title=p.name;el.textContent='P';wrap.appendChild(el)});gates.forEach(g=>{const el=document.createElement('div');const off=g.connection_status!=='ONLINE'||g.override_status==='OFFLINE';el.className=`marker gate ${off?'offline':''}`;el.style.left=`${g.map_x*100}%`;el.style.top=`${g.map_y*100}%`;el.title=g.name;el.textContent='W';wrap.appendChild(el)})}
+function renderTable(){if(selectedTab==='pois')renderPois();if(selectedTab==='gates')renderGates();if(selectedTab==='beacons')renderBeacons()}
+function renderPois(){$('tableActions').innerHTML=`<button class="primary" onclick="openPoiModal('add')">+ Add POI</button>`;$('dataTable').innerHTML=`<table><thead><tr><th>Name</th><th>Category</th><th>Map</th><th>GPS</th><th>Actions</th></tr></thead><tbody>${pois.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="small">${esc(p.id)}</div></td><td>${esc(p.category)}</td><td>${num(p.map_x)}, ${num(p.map_y)}</td><td>${p.latitude?'<span class="pill good">GPS</span>':'<span class="pill warn">No GPS</span>'}</td><td><div class="actions"><button onclick="openPoiModal('edit','${esc(p.id)}')">Edit</button><button class="danger" onclick="deletePoi('${esc(p.id)}')">Delete</button></div></td></tr>`).join('')||'<tr><td colspan="5" class="small">No POIs saved for this event yet.</td></tr>'}</tbody></table>`}
+function renderGates(){$('tableActions').innerHTML=`<button class="primary" onclick="openGateModal('add')">+ Add WRSTOPS Gate</button>`;$('dataTable').innerHTML=`<table><thead><tr><th>Name</th><th>Map</th><th>Status</th><th>Scans</th><th>Actions</th></tr></thead><tbody>${gates.map(g=>{const off=g.connection_status!=='ONLINE'||g.override_status==='OFFLINE';return `<tr><td><b>${esc(g.name)}</b><div class="small">${esc(g.id)}</div></td><td>${num(g.map_x)}, ${num(g.map_y)}</td><td><span class="pill ${off?'bad':'good'}">${off?'OFFLINE':'ONLINE'}</span></td><td>${esc(g.scan_count)}</td><td><div class="actions"><button onclick="openGateModal('edit','${esc(g.id)}')">Edit</button><button class="warn" onclick="toggleGate('${esc(g.id)}')">${off?'Online':'Offline'}</button><button onclick="resetScans('${esc(g.id)}')">Reset</button><button class="danger" onclick="deleteGate('${esc(g.id)}')">Delete</button></div></td></tr>`}).join('')||'<tr><td colspan="5" class="small">No WRSTOPS gates saved for this event yet.</td></tr>'}</tbody></table>`}
+function renderBeacons(){$('tableActions').innerHTML=`<button onclick="refreshAll()">Refresh Codes</button>`;$('dataTable').innerHTML=`<table><thead><tr><th>Code</th><th>Name</th><th>GPS</th><th>Updated</th><th>Actions</th></tr></thead><tbody>${beacons.map(b=>`<tr><td><b>${esc(b.code)}</b></td><td>${esc(b.name)}</td><td>${num(b.latitude,6)}, ${num(b.longitude,6)}</td><td class="small">${esc(b.updated_at)}</td><td><button class="danger" onclick="deleteBeacon('${esc(b.code)}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="5" class="small">No active Quickfinder codes.</td></tr>'}</tbody></table>`}
+function openPoiModal(mode,id=null){const p=id?pois.find(x=>x.id===id):null;modalMode=mode;modalKind='poi';modalId=id;const x=p?.map_x??0.5,y=p?.map_y??0.5;$('modalTitle').textContent=mode==='add'?'Add POI':'Edit POI';$('modalBody').innerHTML=`<div class="formGrid"><div class="wide"><label>Name</label><input id="f-name" value="${esc(p?.name||'')}" placeholder="Box Office" /></div><div class="wide"><label>Category</label><input id="f-category" value="${esc(p?.category||'Custom POIs')}" /></div><div><label>Map X</label><input id="f-mapx" type="number" min="0" max="1" step="0.001" value="${x}" /></div><div><label>Map Y</label><input id="f-mapy" type="number" min="0" max="1" step="0.001" value="${y}" /></div><div><label>Latitude optional</label><input id="f-lat" type="number" step="0.000001" value="${p?.latitude??''}" /></div><div><label>Longitude optional</label><input id="f-lng" type="number" step="0.000001" value="${p?.longitude??''}" /></div></div>`;$('modalFooter').innerHTML=`<button class="ghost" onclick="closeModal()">Cancel</button><button class="primary" onclick="savePoi()">Save POI</button>`;$('modalBackdrop').classList.add('show')}
+function openGateModal(mode,id=null){const g=id?gates.find(x=>x.id===id):null;modalMode=mode;modalKind='gate';modalId=id;const x=g?.map_x??0.5,y=g?.map_y??0.5;$('modalTitle').textContent=mode==='add'?'Add WRSTOPS Gate':'Edit WRSTOPS Gate';$('modalBody').innerHTML=`<div class="formGrid"><div class="wide"><label>Gate Name</label><input id="f-name" value="${esc(g?.name||'')}" placeholder="Gate 1" /></div><div><label>Map X</label><input id="f-mapx" type="number" min="0" max="1" step="0.001" value="${x}" /></div><div><label>Map Y</label><input id="f-mapy" type="number" min="0" max="1" step="0.001" value="${y}" /></div><div><label>Scan Count</label><input id="f-scans" type="number" min="0" step="1" value="${g?.scan_count??0}" /></div><div><label>IP Address optional</label><input id="f-ip" value="${esc(g?.ip_address||'')}" placeholder="10.20.4.16" /></div><div><label>Connection</label><select id="f-status"><option ${g?.connection_status!=='OFFLINE'?'selected':''}>ONLINE</option><option ${g?.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="f-override"><option ${g?.override_status!=='OFFLINE'?'selected':''}>NORMAL</option><option ${g?.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div>`;$('modalFooter').innerHTML=`<button class="ghost" onclick="closeModal()">Cancel</button><button class="primary" onclick="saveGate()">Save Gate</button>`;$('modalBackdrop').classList.add('show')}
+function closeModal(){$('modalBackdrop').classList.remove('show');modalMode=modalKind=modalId=null}function handleMapClick(ev){if(!modalKind)return;const r=$('mapWrap').getBoundingClientRect();const x=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));const y=Math.max(0,Math.min(1,(ev.clientY-r.top)/r.height));if($('f-mapx')&&$('f-mapy')){$('f-mapx').value=x.toFixed(3);$('f-mapy').value=y.toFixed(3)}setStatus(`Picked map position ${x.toFixed(3)}, ${y.toFixed(3)}.`)}
+async function savePoi(){const payload={name:$('f-name').value.trim()||'New POI',category:$('f-category').value.trim()||'Custom POIs',map_x:Number($('f-mapx').value),map_y:Number($('f-mapy').value),updated_by:'dash'};if($('f-lat').value)payload.latitude=Number($('f-lat').value);if($('f-lng').value)payload.longitude=Number($('f-lng').value);try{if(modalMode==='add')await api(`/events/${selectedEventId}/pois`,{method:'POST',body:JSON.stringify(payload)});else await api(`/events/${selectedEventId}/pois/${modalId}`,{method:'PUT',body:JSON.stringify(payload)});closeModal();await refreshAll()}catch(e){setStatus(`Save POI failed: ${e.message}`)}}
+async function saveGate(){const payload={name:$('f-name').value.trim()||'Gate',map_x:Number($('f-mapx').value),map_y:Number($('f-mapy').value),scan_count:Number($('f-scans').value||0),ip_address:$('f-ip').value.trim()||null,connection_status:$('f-status').value,override_status:$('f-override').value,updated_by:'dash'};try{if(modalMode==='add')await api(`/events/${selectedEventId}/wrstops-gates`,{method:'POST',body:JSON.stringify(payload)});else await api(`/events/${selectedEventId}/wrstops-gates/${modalId}`,{method:'PUT',body:JSON.stringify(payload)});closeModal();await refreshAll()}catch(e){setStatus(`Save gate failed: ${e.message}`)}}
+async function deletePoi(id){if(!confirm('Delete this POI?'))return;try{await api(`/events/${selectedEventId}/pois/${id}`,{method:'DELETE'});await refreshAll()}catch(e){setStatus(`Delete POI failed: ${e.message}`)}}async function deleteGate(id){if(!confirm('Delete this WRSTOPS gate?'))return;try{await api(`/events/${selectedEventId}/wrstops-gates/${id}`,{method:'DELETE'});await refreshAll()}catch(e){setStatus(`Delete gate failed: ${e.message}`)}}async function toggleGate(id){const g=gates.find(x=>x.id===id);if(!g)return;const off=g.connection_status!=='ONLINE'||g.override_status==='OFFLINE';const payload={...g,connection_status:off?'ONLINE':'OFFLINE',override_status:off?'NORMAL':'OFFLINE',updated_by:'dash'};try{await api(`/events/${selectedEventId}/wrstops-gates/${id}`,{method:'PUT',body:JSON.stringify(payload)});await refreshAll()}catch(e){setStatus(`Toggle gate failed: ${e.message}`)}}async function resetScans(id){const g=gates.find(x=>x.id===id);if(!g)return;try{await api(`/events/${selectedEventId}/wrstops-gates/${id}`,{method:'PUT',body:JSON.stringify({...g,scan_count:0,updated_by:'dash'})});await refreshAll()}catch(e){setStatus(`Reset scans failed: ${e.message}`)}}async function deleteBeacon(code){if(!confirm(`Delete Quickfinder code ${code}?`))return;try{await api(`/beacons/${code}`,{method:'DELETE'});await refreshAll()}catch(e){setStatus(`Delete code failed: ${e.message}`)}}
+boot();
+</script>
+</body>
+</html>
+'''
 
 
 def query_pois_for_event(event_id: str):
@@ -936,6 +1008,20 @@ def create_quickfinder_beacon(payload: BeaconCreate):
         ).fetchone()
 
     return beacon_row_to_dict(row)
+
+
+@app.get("/beacons")
+def list_quickfinder_beacons():
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM quickfinder_beacons
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+
+    return [beacon_row_to_dict(row) for row in rows]
 
 
 @app.get("/beacons/{code}")
