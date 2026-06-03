@@ -17,7 +17,46 @@ MAPS_DIR = os.path.join(STATIC_DIR, "maps")
 
 os.makedirs(MAPS_DIR, exist_ok=True)
 
-app = FastAPI(title="Beacon Server", version="3.2.0")
+MAP_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"]
+
+
+def find_map_url(base_name: str) -> str:
+    """
+    Returns the first existing static map URL for a base filename.
+
+    This lets Dash work with any of these files:
+        static/maps/lib_map.png
+        static/maps/lib_map.jpg
+        static/maps/lib_map.jpeg
+        static/maps/lib_map.webp
+
+    The important part is that the base name stays consistent.
+    """
+    for ext in MAP_EXTENSIONS:
+        candidate = os.path.join(MAPS_DIR, f"{base_name}{ext}")
+        if os.path.exists(candidate):
+            return f"/static/maps/{base_name}{ext}"
+
+    # Predictable fallback. Dash will show the styled placeholder if the image fails.
+    return f"/static/maps/{base_name}.png"
+
+
+def map_file_status(base_name: str) -> dict:
+    found = []
+    for ext in MAP_EXTENSIONS:
+        candidate = os.path.join(MAPS_DIR, f"{base_name}{ext}")
+        if os.path.exists(candidate):
+            found.append(f"{base_name}{ext}")
+
+    return {
+        "base_name": base_name,
+        "map_url": find_map_url(base_name),
+        "found_files": found,
+        "exists": bool(found),
+    }
+
+
+app = FastAPI(title="Beacon Server", version="3.2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -466,19 +505,40 @@ def health():
         "poi_count": count,
         "beacon_count": beacon_count,
         "wrstops_gate_count": wrstops_gate_count,
+        "maps": [map_file_status(event["map_name"]) for event in EVENTS],
         "time": now_iso(),
     }
 
 
 EVENTS = [
-    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "map_url": "/static/maps/lib_map.png", "description": "LIB event map and POI set."},
-    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "map_url": "/static/maps/f250_map.png", "description": "Freedom 250 White House field test event."},
+    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "description": "LIB event map and POI set."},
+    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "description": "Freedom 250 White House field test event."},
 ]
+
+
+def get_event_config(event_id: str) -> dict:
+    for event in EVENTS:
+        if event["id"] == event_id:
+            event_copy = dict(event)
+            event_copy["map_url"] = find_map_url(event_copy["map_name"])
+            return event_copy
+
+    raise HTTPException(status_code=404, detail="Event not found")
 
 
 @app.get("/events")
 def get_events():
-    return EVENTS
+    return [get_event_config(event["id"]) for event in EVENTS]
+
+
+@app.get("/events/{event_id}")
+def get_event(event_id: str):
+    return get_event_config(event_id)
+
+
+@app.get("/maps/status")
+def maps_status():
+    return [map_file_status(event["map_name"]) for event in EVENTS]
 
 
 @app.get("/dash", response_class=HTMLResponse)
