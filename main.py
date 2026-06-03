@@ -48,6 +48,7 @@ BUILT_IN_POIS = [
 
 
 class PoiCreate(BaseModel):
+    event_id: Optional[str] = Field(default="lib_2026", max_length=80)
     name: str = Field(min_length=1, max_length=120)
     category: str = Field(default="Custom POIs", max_length=120)
     map_x: float = Field(ge=0.0, le=1.0)
@@ -59,6 +60,7 @@ class PoiCreate(BaseModel):
 
 
 class PoiUpdate(BaseModel):
+    event_id: Optional[str] = Field(default=None, max_length=80)
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     category: Optional[str] = Field(default=None, max_length=120)
     map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -128,6 +130,7 @@ def get_connection():
 def row_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
+        "event_id": row["event_id"],
         "name": row["name"],
         "category": row["category"],
         "map_x": row["map_x"],
@@ -209,6 +212,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS pois (
                 id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL DEFAULT 'lib_2026',
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
                 map_x REAL NOT NULL,
@@ -273,6 +277,16 @@ def init_db():
         if "gps_source" not in existing_columns:
             conn.execute("ALTER TABLE pois ADD COLUMN gps_source TEXT")
 
+        if "event_id" not in existing_columns:
+            conn.execute("ALTER TABLE pois ADD COLUMN event_id TEXT NOT NULL DEFAULT 'lib_2026'")
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pois_event_id
+            ON pois(event_id)
+            """
+        )
+
         # Seed/update built-in POIs.
         # This updates map_x/map_y from the seed list unless you have edited them.
         # If you want server/admin edits to survive redeploys, comment out the
@@ -281,9 +295,9 @@ def init_db():
             conn.execute(
                 """
                 INSERT INTO pois (
-                    id, name, category, map_x, map_y, is_custom
+                    id, event_id, name, category, map_x, map_y, is_custom
                 )
-                VALUES (?, ?, ?, ?, ?, 0)
+                VALUES (?, 'lib_2026', ?, ?, ?, ?, 0)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     category = excluded.category
@@ -448,6 +462,219 @@ def health():
     }
 
 
+def query_pois_for_event(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM pois
+            WHERE event_id = ?
+            ORDER BY
+                CASE category
+                    WHEN 'Services & Amenities' THEN 1
+                    WHEN 'Stages' THEN 2
+                    WHEN 'Plazas' THEN 3
+                    WHEN 'Entrances' THEN 4
+                    WHEN 'Custom POIs' THEN 5
+                    ELSE 6
+                END,
+                name COLLATE NOCASE ASC
+            """,
+            (event_id,),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
+@app.get("/events/{event_id}/pois")
+def get_event_pois(event_id: str):
+    return query_pois_for_event(event_id)
+
+
+@app.get("/events/{event_id}/pois/{poi_id}")
+def get_event_poi(event_id: str, poi_id: str):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="POI not found")
+
+    return row_to_dict(row)
+
+
+@app.post("/events/{event_id}/pois")
+def create_event_poi(event_id: str, payload: PoiCreate):
+    poi_id = "custom_" + uuid4().hex[:12]
+    timestamp = now_iso()
+
+    gps_source = None
+    if payload.latitude is not None and payload.longitude is not None:
+        gps_source = "custom_created"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO pois (
+                id, event_id, name, category, map_x, map_y, is_custom,
+                latitude, longitude, accuracy_meters, updated_at, updated_by, gps_source
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                poi_id,
+                event_id,
+                payload.name,
+                payload.category or "Custom POIs",
+                payload.map_x,
+                payload.map_y,
+                payload.latitude,
+                payload.longitude,
+                payload.accuracy_meters,
+                timestamp,
+                payload.updated_by,
+                gps_source,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+    return row_to_dict(row)
+
+
+@app.put("/events/{event_id}/pois/{poi_id}")
+def update_event_poi(event_id: str, poi_id: str, payload: PoiUpdate):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="POI not found")
+
+        name = payload.name if payload.name is not None else existing["name"]
+        category = payload.category if payload.category is not None else existing["category"]
+        map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
+        map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+        latitude = payload.latitude if payload.latitude is not None else existing["latitude"]
+        longitude = payload.longitude if payload.longitude is not None else existing["longitude"]
+        accuracy_meters = payload.accuracy_meters if payload.accuracy_meters is not None else existing["accuracy_meters"]
+
+        gps_source = existing["gps_source"]
+        if payload.latitude is not None and payload.longitude is not None:
+            gps_source = "manual_update"
+
+        conn.execute(
+            """
+            UPDATE pois
+            SET
+                name = ?,
+                category = ?,
+                map_x = ?,
+                map_y = ?,
+                latitude = ?,
+                longitude = ?,
+                accuracy_meters = ?,
+                updated_at = ?,
+                updated_by = ?,
+                gps_source = ?
+            WHERE id = ? AND event_id = ?
+            """,
+            (
+                name,
+                category,
+                map_x,
+                map_y,
+                latitude,
+                longitude,
+                accuracy_meters,
+                now_iso(),
+                payload.updated_by,
+                gps_source,
+                poi_id,
+                event_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+    return row_to_dict(row)
+
+
+@app.put("/events/{event_id}/pois/{poi_id}/location")
+def update_event_poi_location(event_id: str, poi_id: str, payload: LocationUpdate):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="POI not found")
+
+        conn.execute(
+            """
+            UPDATE pois
+            SET
+                latitude = ?,
+                longitude = ?,
+                accuracy_meters = ?,
+                updated_at = ?,
+                updated_by = ?,
+                gps_source = ?
+            WHERE id = ? AND event_id = ?
+            """,
+            (
+                payload.latitude,
+                payload.longitude,
+                payload.accuracy_meters,
+                now_iso(),
+                payload.updated_by,
+                "manual_location",
+                poi_id,
+                event_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+    return row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/pois/{poi_id}")
+def delete_event_poi(event_id: str, poi_id: str):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="POI not found")
+
+        if not bool(existing["is_custom"]):
+            raise HTTPException(status_code=403, detail="Built-in POIs cannot be deleted")
+
+        conn.execute("DELETE FROM pois WHERE id = ? AND event_id = ?", (poi_id, event_id))
+        conn.commit()
+
+    return {"deleted": True, "id": poi_id, "event_id": event_id}
+
+
 @app.get("/pois")
 def get_pois():
     with get_connection() as conn:
@@ -455,6 +682,7 @@ def get_pois():
             """
             SELECT *
             FROM pois
+            WHERE event_id = 'lib_2026'
             ORDER BY
                 CASE category
                     WHEN 'Services & Amenities' THEN 1
@@ -475,8 +703,8 @@ def get_pois():
 def get_poi(poi_id: str):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM pois WHERE id = ?",
-            (poi_id,),
+            "SELECT * FROM pois WHERE id = ? AND event_id = ?",
+            (poi_id, "lib_2026"),
         ).fetchone()
 
     if row is None:
@@ -498,13 +726,14 @@ def create_poi(payload: PoiCreate):
         conn.execute(
             """
             INSERT INTO pois (
-                id, name, category, map_x, map_y, is_custom,
+                id, event_id, name, category, map_x, map_y, is_custom,
                 latitude, longitude, accuracy_meters, updated_at, updated_by, gps_source
             )
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
             """,
             (
                 poi_id,
+                payload.event_id or "lib_2026",
                 payload.name,
                 payload.category or "Custom POIs",
                 payload.map_x,
