@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 
-
 DATABASE_PATH = os.getenv("DATABASE_PATH", "beacon.db")
 STATIC_DIR = os.getenv("STATIC_DIR", "static")
 MAPS_DIR = os.path.join(STATIC_DIR, "maps")
