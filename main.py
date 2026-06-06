@@ -158,6 +158,37 @@ class WrstopsGateUpdate(BaseModel):
     updated_by: Optional[str] = "android_wrstops"
 
 
+
+
+class CalibrationAnchorCreate(BaseModel):
+    map_x: float = Field(ge=0.0, le=1.0)
+    map_y: float = Field(ge=0.0, le=1.0)
+    latitude: float
+    longitude: float
+    accuracy_meters: Optional[float] = None
+    created_by: Optional[str] = "android_survey"
+
+
+class SurveyPathPointCreate(BaseModel):
+    seq: int
+    latitude: float
+    longitude: float
+    accuracy_meters: Optional[float] = None
+    timestamp: Optional[str] = None
+
+
+class SurveyPathCreate(BaseModel):
+    name: str = Field(default="Survey Path", min_length=1, max_length=160)
+    survey_mode: str = Field(default="direct_path", max_length=40)
+    path_type: str = Field(default="guest", max_length=40)
+    start_map_x: float = Field(ge=0.0, le=1.0)
+    start_map_y: float = Field(ge=0.0, le=1.0)
+    end_map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    end_map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    distance_meters: Optional[float] = 0.0
+    created_by: Optional[str] = "android_survey"
+    points: List[SurveyPathPointCreate] = []
+
 class InferGpsRequest(BaseModel):
     anchor_ids: Optional[List[str]] = None
     overwrite_existing: bool = False
@@ -229,6 +260,54 @@ def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
         "updated_by": row["updated_by"],
     }
 
+
+
+
+def calibration_anchor_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+    }
+
+
+def survey_path_row_to_dict(row: sqlite3.Row, points=None) -> dict:
+    payload = {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "survey_mode": row["survey_mode"],
+        "path_type": row["path_type"],
+        "start_map_x": row["start_map_x"],
+        "start_map_y": row["start_map_y"],
+        "end_map_x": row["end_map_x"],
+        "end_map_y": row["end_map_y"],
+        "distance_meters": row["distance_meters"],
+        "point_count": row["point_count"],
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+    }
+    if points is not None:
+        payload["points"] = points
+    return payload
+
+
+def survey_point_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "seq": row["seq"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
+        "timestamp": row["timestamp"],
+    }
 
 def normalize_beacon_code(code: str) -> str:
     cleaned = "".join(ch for ch in code.upper().strip() if ch.isalnum())
@@ -312,6 +391,79 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_wrstops_gates_event_id
             ON wrstops_gates(event_id)
+            """
+        )
+
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS map_calibration_anchors (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                map_x REAL NOT NULL,
+                map_y REAL NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                accuracy_meters REAL,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_map_calibration_event_id
+            ON map_calibration_anchors(event_id)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS survey_paths (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                survey_mode TEXT NOT NULL,
+                path_type TEXT NOT NULL,
+                start_map_x REAL NOT NULL,
+                start_map_y REAL NOT NULL,
+                end_map_x REAL,
+                end_map_y REAL,
+                distance_meters REAL,
+                point_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_survey_paths_event_id
+            ON survey_paths(event_id)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS survey_path_points (
+                id TEXT PRIMARY KEY,
+                path_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                accuracy_meters REAL,
+                timestamp TEXT,
+                FOREIGN KEY(path_id) REFERENCES survey_paths(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_survey_path_points_path_id
+            ON survey_path_points(path_id)
             """
         )
 
@@ -1273,6 +1425,209 @@ def delete_wrstops_gate(event_id: str, gate_id: str):
         conn.commit()
 
     return {"deleted": True, "id": gate_id, "event_id": event_id}
+
+
+
+@app.get("/events/{event_id}/calibration-anchors")
+def get_calibration_anchors(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM map_calibration_anchors
+            WHERE event_id = ?
+            ORDER BY created_at ASC
+            """,
+            (event_id,),
+        ).fetchall()
+
+    return [calibration_anchor_row_to_dict(row) for row in rows]
+
+
+@app.post("/events/{event_id}/calibration-anchors")
+def create_calibration_anchor(event_id: str, payload: CalibrationAnchorCreate):
+    anchor_id = "anchor_" + uuid4().hex[:12]
+    timestamp = now_iso()
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO map_calibration_anchors (
+                id, event_id, map_x, map_y, latitude, longitude,
+                accuracy_meters, created_at, created_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                anchor_id,
+                event_id,
+                payload.map_x,
+                payload.map_y,
+                payload.latitude,
+                payload.longitude,
+                payload.accuracy_meters,
+                timestamp,
+                payload.created_by,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM map_calibration_anchors WHERE id = ? AND event_id = ?",
+            (anchor_id, event_id),
+        ).fetchone()
+
+    return calibration_anchor_row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/calibration-anchors/{anchor_id}")
+def delete_calibration_anchor(event_id: str, anchor_id: str):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM map_calibration_anchors WHERE id = ? AND event_id = ?",
+            (anchor_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Calibration anchor not found")
+
+        conn.execute(
+            "DELETE FROM map_calibration_anchors WHERE id = ? AND event_id = ?",
+            (anchor_id, event_id),
+        )
+        conn.commit()
+
+    return {"deleted": True, "id": anchor_id}
+
+
+@app.get("/events/{event_id}/survey-paths")
+def get_survey_paths(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM survey_paths
+            WHERE event_id = ?
+            ORDER BY created_at DESC
+            """,
+            (event_id,),
+        ).fetchall()
+
+    return [survey_path_row_to_dict(row) for row in rows]
+
+
+@app.get("/events/{event_id}/survey-paths/{path_id}")
+def get_survey_path(event_id: str, path_id: str):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM survey_paths WHERE id = ? AND event_id = ?",
+            (path_id, event_id),
+        ).fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="Survey path not found")
+
+        point_rows = conn.execute(
+            """
+            SELECT *
+            FROM survey_path_points
+            WHERE path_id = ?
+            ORDER BY seq ASC
+            """,
+            (path_id,),
+        ).fetchall()
+
+    return survey_path_row_to_dict(row, [survey_point_row_to_dict(point) for point in point_rows])
+
+
+@app.post("/events/{event_id}/survey-paths")
+def create_survey_path(event_id: str, payload: SurveyPathCreate):
+    path_id = "survey_" + uuid4().hex[:12]
+    timestamp = now_iso()
+    name = payload.name.strip() or "Survey Path"
+    survey_mode = payload.survey_mode.strip().lower() or "direct_path"
+    path_type = payload.path_type.strip().lower() or "guest"
+
+    if survey_mode not in {"direct_path", "area_walk"}:
+        raise HTTPException(status_code=400, detail="survey_mode must be direct_path or area_walk")
+
+    if path_type not in {"guest", "staff", "cart", "restricted", "emergency"}:
+        raise HTTPException(status_code=400, detail="Unsupported path_type")
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO survey_paths (
+                id, event_id, name, survey_mode, path_type,
+                start_map_x, start_map_y, end_map_x, end_map_y,
+                distance_meters, point_count, created_at, created_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                path_id,
+                event_id,
+                name,
+                survey_mode,
+                path_type,
+                payload.start_map_x,
+                payload.start_map_y,
+                payload.end_map_x,
+                payload.end_map_y,
+                payload.distance_meters or 0.0,
+                len(payload.points),
+                timestamp,
+                payload.created_by,
+            ),
+        )
+
+        for index, point in enumerate(payload.points):
+            conn.execute(
+                """
+                INSERT INTO survey_path_points (
+                    id, path_id, seq, latitude, longitude, accuracy_meters, timestamp
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "survey_point_" + uuid4().hex[:12],
+                    path_id,
+                    point.seq if point.seq is not None else index,
+                    point.latitude,
+                    point.longitude,
+                    point.accuracy_meters,
+                    point.timestamp or timestamp,
+                ),
+            )
+
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM survey_paths WHERE id = ? AND event_id = ?",
+            (path_id, event_id),
+        ).fetchone()
+
+    return survey_path_row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/survey-paths/{path_id}")
+def delete_survey_path(event_id: str, path_id: str):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM survey_paths WHERE id = ? AND event_id = ?",
+            (path_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Survey path not found")
+
+        conn.execute("DELETE FROM survey_path_points WHERE path_id = ?", (path_id,))
+        conn.execute("DELETE FROM survey_paths WHERE id = ? AND event_id = ?", (path_id, event_id))
+        conn.commit()
+
+    return {"deleted": True, "id": path_id}
+
+
 
 
 @app.post("/calibration/infer-gps")
