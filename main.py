@@ -190,6 +190,18 @@ class SurveyPathCreate(BaseModel):
     points: List[SurveyPathPointCreate] = []
 
 
+class SurveyPathUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    survey_mode: Optional[str] = Field(default=None, max_length=40)
+    path_type: Optional[str] = Field(default=None, max_length=40)
+    start_map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    start_map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    end_map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    end_map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    distance_meters: Optional[float] = None
+    updated_by: Optional[str] = "dash_editor"
+
+
 class WifiSweepSampleCreate(BaseModel):
     seq: int
     latitude: float
@@ -815,111 +827,81 @@ DASH_HTML = r'''
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Beacon Dash</title>
   <style>
-    :root{--bg:#07111d;--panel:#101c2b;--panel2:#18283c;--text:#f6f8fc;--muted:#8ea2b8;--line:rgba(255,255,255,.13);--blue:#5db7ff;--green:#00e676;--yellow:#ffeb3b;--orange:#ff9800;--red:#ff1744}
-    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at top left,#173a5f 0,#07111d 520px);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text)}
+    :root{--bg:#08111d;--panel:#101c2b;--panel2:#152338;--muted:#8ea2b8;--text:#f5f8fc;--line:rgba(255,255,255,.12);--blue:#5db7ff;--green:#6df7a7;--yellow:#ffd166;--red:#ff6b6b}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text);background:radial-gradient(circle at top left,#14365a 0,var(--bg) 36rem)}
     button,input,select,textarea{font:inherit} button{border:1px solid var(--line);border-radius:12px;background:#1d3552;color:var(--text);padding:9px 12px;cursor:pointer} button:hover{filter:brightness(1.12)} button.primary{background:#1565c0;border-color:#5db7ff} button.danger{background:#6b1e25;border-color:#ff6b6b} button.ghost{background:transparent}
     input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:#07101b;color:var(--text);padding:10px;outline:none} textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px} label{display:block;font-size:12px;color:var(--muted);margin:8px 0 5px}
     .app{max-width:1500px;margin:0 auto;padding:18px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}.brand h1{margin:0;font-size:30px;letter-spacing:.05em}.brand p{margin:4px 0 0;color:var(--muted)}
     .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}
     .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}
-    .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
-    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5)}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0}.anchor{width:14px;height:14px;background:#00e5ff}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
-    table{width:100%;border-collapse:collapse;font-size:12px} th,td{padding:7px;border-bottom:1px solid var(--line);text-align:left} th{color:var(--muted);font-weight:600}.hidden{display:none!important}
+    .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
+    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
+    .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.hidden{display:none!important}
   </style>
 </head>
 <body>
 <div class="app">
-  <div class="top">
-    <div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div>
-    <div class="events" id="eventButtons"></div>
-  </div>
-  <div class="tabs" id="tabs">
-    <button class="tab active" data-tab="overview">Overview</button>
-    <button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button>
-    <button class="tab" data-tab="remoteSurvey">Remote Survey</button>
-    <button class="tab" data-tab="calibration">Calibration</button>
-    <button class="tab" data-tab="data">POIs / WRSTOPS</button>
-  </div>
-  <br />
+  <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
+  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="data">POIs / Survey / WRSTOPS</button></div><br />
   <div class="layout">
-    <div class="panel">
-      <div class="panelHeader"><h2 id="mapTitle">Map</h2><button onclick="refreshAll()">Refresh</button></div>
-      <div class="panelBody">
-        <div class="mapWrap" id="mapWrap">
-          <div class="placeholder">Map loading...</div>
-          <svg class="pathLine" id="pathSvg" viewBox="0 0 1000 562" preserveAspectRatio="none"></svg>
-        </div>
-        <div class="legend"><div class="grad"></div><span>Wi-Fi signal: green strongest → red weakest</span></div>
-        <div class="status" id="status">Ready.</div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panelHeader"><h2 id="toolTitle">Overview</h2></div>
-      <div class="panelBody">
-        <section id="tab-overview">
-          <p class="muted">Select an event, then use the tabs to inspect saved Wi-Fi sweeps, create remote survey paths from Google Maps coordinates, and add calibration anchors.</p>
-          <div class="card"><h3>Tip</h3><p>For remote survey, click the map to set start/end map anchors, paste decimal latitude/longitude pairs, then save.</p></div>
-        </section>
-        <section id="tab-wifi" class="hidden">
-          <div class="row"><button onclick="loadWifiSweeps()">Refresh Sweeps</button><button class="ghost" onclick="clearOverlay()">Clear Layer</button></div>
-          <br /><div class="list" id="wifiList"></div>
-        </section>
-        <section id="tab-remoteSurvey" class="hidden">
-          <label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" />
-          <div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div>
-          <div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div>
-          <div class="small" id="rsMapInfo">Start/end map anchors not set.</div>
-          <label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea>
-          <div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div>
-        </section>
-        <section id="tab-calibration" class="hidden">
-          <p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p>
-          <div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button></div>
-          <div class="small" id="calMapInfo">No map point selected.</div>
-          <label>Latitude</label><input id="calLat" placeholder="38.896889" />
-          <label>Longitude</label><input id="calLng" placeholder="-77.036583" />
-          <div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div>
-          <br /><div class="list" id="anchorList"></div>
-        </section>
-        <section id="tab-data" class="hidden">
-          <div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadGates()">WRSTOPS</button></div>
-          <br /><div id="dataList" class="list"></div>
-        </section>
-      </div>
-    </div>
+    <div class="panel"><div class="panelHeader"><h2 id="mapTitle">Map</h2><button onclick="refreshAll()">Refresh</button></div><div class="panelBody"><div class="mapWrap" id="mapWrap"><div class="placeholder">Map loading...</div><svg class="pathLine" id="pathSvg" viewBox="0 0 1000 562" preserveAspectRatio="none"></svg></div><div class="legend"><div class="grad"></div><span>Wi-Fi signal: green strongest → red weakest</span></div><div class="status" id="status">Ready.</div></div></div>
+    <div class="panel"><div class="panelHeader"><h2 id="toolTitle">Overview</h2></div><div class="panelBody">
+      <section id="tab-overview"><p class="muted">Click a POI, calibration anchor, or survey path directly on the map to select it. The matching item highlights in the list on the right and expands with edit/delete controls.</p><div class="card"><h3>Selection behavior</h3><p>POIs and survey paths are now linked both ways: map → list and list → map.</p></div></section>
+      <section id="tab-wifi" class="hidden"><div class="row"><button onclick="loadWifiSweeps()">Refresh Sweeps</button><button class="ghost" onclick="clearOverlay(); drawBase();">Clear Layer</button></div><br /><div class="list" id="wifiList"></div></section>
+      <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
+      <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section>
+      <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button onclick="loadGates()">WRSTOPS</button></div><br /><div id="dataList" class="list"></div></section>
+    </div></div>
   </div>
 </div>
 <script>
-let events=[], currentEvent=null, currentTab='overview', mapClickMode=null;
-let mapImageUrl=null, mapAnchors=[], pois=[], gates=[], wifiSweeps=[];
+let events=[], currentEvent=null, currentTab='overview', mapClickMode=null, dataMode='pois';
+let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[];
 let remoteSurveyStart=null, remoteSurveyEnd=null, calibrationMapPoint=null;
-
+let selectedKind=null, selectedId=null;
 function setStatus(t){document.getElementById('status').textContent=t;}
 function api(path, opts={}){return fetch(path,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{if(!r.ok){throw new Error(await r.text())} return r.status===204?null:r.json()})}
-function setTab(tab){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / WRSTOPS'}[tab]||tab; clearOverlay(); if(tab==='wifi')loadWifiSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois();}
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
-
+function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
-function marker(x,y,cls,title){const el=document.createElement('div'); el.className='marker '+cls; el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; document.getElementById('mapWrap').appendChild(el); return el;}
+function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
+function setTab(tab){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS'}[tab]||tab; clearOverlay(); if(tab==='wifi')loadWifiSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois();}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId))el.classList.add('selected'); el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} document.getElementById('mapWrap').appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
 function heat(x,y,rssi,title){const el=marker(x,y,'heat',title); el.style.background=wifiColor(rssi); el.style.boxShadow=`0 0 24px 10px ${wifiColor(rssi)}`; return el;}
 function clearOverlay(){document.querySelectorAll('.marker').forEach(e=>e.remove()); document.getElementById('pathSvg').innerHTML='';}
-function drawBase(){clearOverlay(); pois.forEach(p=>marker(p.map_x,p.map_y,'poi',p.name)); gates.forEach(g=>marker(g.map_x,g.map_y,'gate',g.name)); mapAnchors.forEach(a=>marker(a.map_x,a.map_y,'anchor','Calibration anchor'));}
+function drawBase(){clearOverlay(); pois.forEach(p=>marker(p.map_x,p.map_y,'poi',`${p.id} ${p.name}`,()=>selectPoi(p.id))); gates.forEach(g=>marker(g.map_x,g.map_y,'gate',`${g.id} ${g.name}`,()=>selectGate(g.id))); mapAnchors.forEach(a=>marker(a.map_x,a.map_y,'anchor',`anchor ${a.id}`,()=>selectAnchor(a.id))); if(dataMode==='survey')drawSurveyPaths();}
 function mapXY(evt){const rect=document.getElementById('mapWrap').getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(evt.clientX-rect.left)/rect.width)), y:Math.max(0,Math.min(1,(evt.clientY-rect.top)/rect.height))}}
-document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} mapClickMode=null;});
+document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} mapClickMode=null;});
 function updateSurveyInfo(){document.getElementById('rsMapInfo').textContent=`Start: ${remoteSurveyStart?remoteSurveyStart.x.toFixed(4)+', '+remoteSurveyStart.y.toFixed(4):'not set'} • End: ${remoteSurveyEnd?remoteSurveyEnd.x.toFixed(4)+', '+remoteSurveyEnd.y.toFixed(4):'not set'}`}
-
-async function init(){events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${ev.name}</b><span>${ev.description||''}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent(events[0]?.id||'lib_2026');}
-async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const wrap=document.getElementById('mapWrap'); wrap.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.src=currentEvent.map_url; img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; wrap.prepend(ph)}; wrap.prepend(img); await refreshAll();}
-async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/wrstops-gates`),api(`/events/${currentEvent.id}/calibration-anchors`)]); drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
-async function loadPois(){const rows=await api(`/events/${currentEvent.id}/pois`); document.getElementById('dataList').innerHTML=rows.map(p=>`<div class="card"><h3>${p.name}</h3><p>${p.category} • map ${p.map_x?.toFixed?.(3)}, ${p.map_y?.toFixed?.(3)}</p></div>`).join('')||'<p class="muted">No POIs.</p>'; drawBase();}
-async function loadGates(){const rows=await api(`/events/${currentEvent.id}/wrstops-gates`); document.getElementById('dataList').innerHTML=rows.map(g=>`<div class="card"><h3>${g.name}</h3><p>${g.connection_status} • scans ${g.scan_count} • map ${g.map_x?.toFixed?.(3)}, ${g.map_y?.toFixed?.(3)}</p></div>`).join('')||'<p class="muted">No gates.</p>'; drawBase();}
-async function loadAnchors(){mapAnchors=await api(`/events/${currentEvent.id}/calibration-anchors`); document.getElementById('anchorList').innerHTML=mapAnchors.map(a=>`<div class="card"><h3>Anchor</h3><p>map ${a.map_x.toFixed(4)}, ${a.map_y.toFixed(4)}<br>${a.latitude}, ${a.longitude}</p></div>`).join('')||'<p class="muted">No anchors.</p>'; drawBase();}
+async function init(){events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent(events[0]?.id||'lib_2026');}
+async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const wrap=document.getElementById('mapWrap'); wrap.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.src=currentEvent.map_url; img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; wrap.prepend(ph)}; wrap.prepend(img); selectedKind=null; selectedId=null; await refreshAll();}
+async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/wrstops-gates`),api(`/events/${currentEvent.id}/calibration-anchors`)]); if(dataMode==='survey')surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`); drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
+function selectPoi(id){setSelected('poi',id); setTab('data'); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}
+async function loadPois(){dataMode='pois'; pois=await api(`/events/${currentEvent.id}/pois`); setSelected(selectedKind==='poi'?'poi':null, selectedKind==='poi'?selectedId:null); renderPois(); drawBase();}
+function renderPois(){const list=document.getElementById('dataList'); list.innerHTML=pois.map(p=>{const sel=selectedKind==='poi'&&selectedId===p.id; return `<div class="card ${sel?'selected':''}" id="poi-${p.id}" onclick="selectPoi('${p.id}')"><h3>${escapeHtml(p.name)}</h3><p>${escapeHtml(p.category)} • map ${n3(p.map_x)}, ${n3(p.map_y)}</p>${sel?poiEditor(p):''}</div>`}).join('')||'<p class="muted">No POIs.</p>';}
+function poiEditor(p){return `<label>Name</label><input id="editPoiName" value="${escapeHtml(p.name)}"><label>Category</label><input id="editPoiCategory" value="${escapeHtml(p.category)}"><div class="row"><div><label>Map X</label><input id="editPoiMapX" value="${n4(p.map_x)}"></div><div><label>Map Y</label><input id="editPoiMapY" value="${n4(p.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editPoiLat" value="${p.latitude??''}"></div><div><label>Longitude</label><input id="editPoiLng" value="${p.longitude??''}"></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); savePoi('${p.id}')">Save POI</button><button onclick="event.stopPropagation(); mapClickMode='movePoi'; setStatus('Click map to move selected POI.')">Move on Map</button><button class="danger" onclick="event.stopPropagation(); deletePoi('${p.id}')">Delete</button></div>`}
+async function savePoi(id){const lat=document.getElementById('editPoiLat').value.trim(), lng=document.getElementById('editPoiLng').value.trim(); const payload={name:document.getElementById('editPoiName').value,category:document.getElementById('editPoiCategory').value,map_x:parseFloat(document.getElementById('editPoiMapX').value),map_y:parseFloat(document.getElementById('editPoiMapY').value),updated_by:'dash_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} await api(`/events/${currentEvent.id}/pois/${id}`,{method:'PUT',body:JSON.stringify(payload)}); await loadPois(); setSelected('poi',id); renderPois(); drawBase(); setStatus('Saved POI.');}
+async function deletePoi(id){if(!confirm('Delete this POI?'))return; await api(`/events/${currentEvent.id}/pois/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadPois(); setStatus('Deleted POI.');}
+function selectGate(id){setSelected('gate',id); setTab('data'); dataMode='gates'; renderGates(); drawBase(); setStatus('Selected WRSTOPS gate.');}
+async function loadGates(){dataMode='gates'; gates=await api(`/events/${currentEvent.id}/wrstops-gates`); renderGates(); drawBase();}
+function renderGates(){document.getElementById('dataList').innerHTML=gates.map(g=>`<div class="card ${selectedKind==='gate'&&selectedId===g.id?'selected':''}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}</p></div>`).join('')||'<p class="muted">No gates.</p>';}
+function selectAnchor(id){setSelected('anchor',id); setTab('calibration'); loadAnchors().then(()=>setStatus('Selected calibration anchor.'));}
+async function loadAnchors(){mapAnchors=await api(`/events/${currentEvent.id}/calibration-anchors`); document.getElementById('anchorList').innerHTML=mapAnchors.map(a=>`<div class="card ${selectedKind==='anchor'&&selectedId===a.id?'selected':''}" onclick="selectAnchor('${a.id}')"><h3>Anchor</h3><p>map ${n4(a.map_x)}, ${n4(a.map_y)}<br>${a.latitude}, ${a.longitude}</p><button class="danger" onclick="event.stopPropagation(); deleteAnchor('${a.id}')">Delete</button></div>`).join('')||'<p class="muted">No anchors.</p>'; drawBase();}
+async function deleteAnchor(id){if(!confirm('Delete this calibration anchor?'))return; await api(`/events/${currentEvent.id}/calibration-anchors/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadAnchors(); setStatus('Deleted calibration anchor.');}
 async function saveCalibrationAnchor(){if(!calibrationMapPoint){setStatus('Click a map point first.');return} const lat=parseFloat(document.getElementById('calLat').value), lng=parseFloat(document.getElementById('calLng').value); if(!Number.isFinite(lat)||!Number.isFinite(lng)){setStatus('Enter valid latitude and longitude.');return} await api(`/events/${currentEvent.id}/calibration-anchors`,{method:'POST',body:JSON.stringify({map_x:calibrationMapPoint.x,map_y:calibrationMapPoint.y,latitude:lat,longitude:lng,accuracy_meters:0,created_by:'dash_remote'})}); calibrationMapPoint=null; document.getElementById('calMapInfo').textContent='Anchor saved.'; await loadAnchors(); setStatus('Saved remote calibration anchor.');}
+function drawSurveyPaths(){const svg=document.getElementById('pathSvg'); surveyPaths.forEach(sp=>{if(sp.start_map_x==null||sp.start_map_y==null)return; marker(sp.start_map_x,sp.start_map_y,'survey',`${sp.id} start`,()=>selectSurveyPath(sp.id)); if(sp.end_map_x!=null&&sp.end_map_y!=null){marker(sp.end_map_x,sp.end_map_y,'survey',`${sp.id} end`,()=>selectSurveyPath(sp.id)); const line=document.createElementNS('http://www.w3.org/2000/svg','line'); line.setAttribute('x1',sp.start_map_x*1000); line.setAttribute('y1',sp.start_map_y*562); line.setAttribute('x2',sp.end_map_x*1000); line.setAttribute('y2',sp.end_map_y*562); line.setAttribute('class','pathSvgLine '+(selectedKind==='survey'&&selectedId===sp.id?'selected':'')); line.style.pointerEvents='auto'; line.onclick=(ev)=>{ev.stopPropagation(); selectSurveyPath(sp.id)}; svg.appendChild(line);}})}
+function selectSurveyPath(id){setSelected('survey',id); setTab('data'); dataMode='survey'; renderSurveyPaths(); drawBase(); setStatus('Selected survey path.');}
+async function loadSurveyPaths(){dataMode='survey'; surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`); renderSurveyPaths(); drawBase();}
+function renderSurveyPaths(){const list=document.getElementById('dataList'); list.innerHTML=surveyPaths.map(sp=>{const sel=selectedKind==='survey'&&selectedId===sp.id; return `<div class="card ${sel?'selected':''}" onclick="selectSurveyPath('${sp.id}')"><h3>${escapeHtml(sp.name)}</h3><p>${escapeHtml(sp.survey_mode)} • ${escapeHtml(sp.path_type)} • ${sp.point_count} GPS points<br>start ${n3(sp.start_map_x)}, ${n3(sp.start_map_y)} ${sp.end_map_x!=null?'→ end '+n3(sp.end_map_x)+', '+n3(sp.end_map_y):''}</p>${sel?surveyEditor(sp):''}</div>`}).join('')||'<p class="muted">No survey paths.</p>';}
+function surveyEditor(sp){return `<label>Name</label><input id="editSurveyName" value="${escapeHtml(sp.name)}"><div class="row"><div><label>Mode</label><select id="editSurveyMode"><option value="direct_path" ${sp.survey_mode==='direct_path'?'selected':''}>Direct Path</option><option value="area_walk" ${sp.survey_mode==='area_walk'?'selected':''}>Area Walk</option></select></div><div><label>Type</label><select id="editSurveyType"><option value="guest" ${sp.path_type==='guest'?'selected':''}>Guest</option><option value="staff" ${sp.path_type==='staff'?'selected':''}>Staff</option><option value="cart" ${sp.path_type==='cart'?'selected':''}>Cart</option><option value="restricted" ${sp.path_type==='restricted'?'selected':''}>Restricted</option><option value="emergency" ${sp.path_type==='emergency'?'selected':''}>Emergency</option></select></div></div><div class="row"><div><label>Start X</label><input id="editSurveyStartX" value="${n4(sp.start_map_x)}"></div><div><label>Start Y</label><input id="editSurveyStartY" value="${n4(sp.start_map_y)}"></div></div><div class="row"><div><label>End X</label><input id="editSurveyEndX" value="${sp.end_map_x??''}"></div><div><label>End Y</label><input id="editSurveyEndY" value="${sp.end_map_y??''}"></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveSurveyPath('${sp.id}')">Save Survey</button><button onclick="event.stopPropagation(); mapClickMode='surveyEditStart'; setStatus('Click map to set survey start.')">Move Start</button><button onclick="event.stopPropagation(); mapClickMode='surveyEditEnd'; setStatus('Click map to set survey end.')">Move End</button><button class="danger" onclick="event.stopPropagation(); deleteSurveyPath('${sp.id}')">Delete</button></div>`}
+async function saveSurveyPath(id){const ex=document.getElementById('editSurveyEndX').value.trim(), ey=document.getElementById('editSurveyEndY').value.trim(); const payload={name:document.getElementById('editSurveyName').value,survey_mode:document.getElementById('editSurveyMode').value,path_type:document.getElementById('editSurveyType').value,start_map_x:parseFloat(document.getElementById('editSurveyStartX').value),start_map_y:parseFloat(document.getElementById('editSurveyStartY').value),end_map_x:ex===''?null:parseFloat(ex),end_map_y:ey===''?null:parseFloat(ey),updated_by:'dash_editor'}; await api(`/events/${currentEvent.id}/survey-paths/${id}`,{method:'PUT',body:JSON.stringify(payload)}); await loadSurveyPaths(); setSelected('survey',id); renderSurveyPaths(); drawBase(); setStatus('Saved survey path.');}
+async function deleteSurveyPath(id){if(!confirm('Delete this survey path?'))return; await api(`/events/${currentEvent.id}/survey-paths/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadSurveyPaths(); setStatus('Deleted survey path.');}
 function parseCoords(){const raw=document.getElementById('rsPoints').value.trim(); if(!raw)return[]; return raw.split(/\n+/).map((line,i)=>{const nums=line.match(/-?\d+(?:\.\d+)?/g)||[]; if(nums.length<2)throw new Error(`Line ${i+1} needs lat,lng`); return {seq:i,latitude:parseFloat(nums[0]),longitude:parseFloat(nums[1]),accuracy_meters:0,timestamp:new Date().toISOString()}})}
-function previewRemoteSurvey(){drawBase(); const pts=parseCoords(); if(remoteSurveyStart)marker(remoteSurveyStart.x,remoteSurveyStart.y,'anchor','Start'); if(remoteSurveyEnd)marker(remoteSurveyEnd.x,remoteSurveyEnd.y,'anchor','End'); setStatus(`Preview ready: ${pts.length} GPS points. Save to store this remote survey path.`)}
-async function saveRemoteSurvey(){if(!remoteSurveyStart){setStatus('Set a start point on the map first.');return} const mode=document.getElementById('rsMode').value; if(mode==='direct_path'&&!remoteSurveyEnd){setStatus('Direct Path needs an end point.');return} let pts; try{pts=parseCoords()}catch(e){setStatus(e.message);return} if(pts.length<1){setStatus('Paste at least one latitude,longitude point.');return} const payload={name:document.getElementById('rsName').value||'Remote Survey Path',survey_mode:mode,path_type:document.getElementById('rsType').value,start_map_x:remoteSurveyStart.x,start_map_y:remoteSurveyStart.y,end_map_x:remoteSurveyEnd?.x??null,end_map_y:remoteSurveyEnd?.y??null,distance_meters:0,created_by:'dash_remote_survey',points:pts}; await api(`/events/${currentEvent.id}/survey-paths`,{method:'POST',body:JSON.stringify(payload)}); setStatus(`Saved remote survey with ${pts.length} GPS points.`)}
-async function loadWifiSweeps(){wifiSweeps=await api(`/events/${currentEvent.id}/wifi-sweeps`); const list=document.getElementById('wifiList'); list.innerHTML=wifiSweeps.map(s=>`<div class="card"><h3>${s.name}</h3><p>${s.sample_count} samples • ${s.target_ssid||'All networks'}<br>${s.created_at||''}</p><div class="row"><button onclick="viewWifiSweep('${s.id}')">View Heatmap</button><button class="danger" onclick="deleteWifiSweep('${s.id}')">Delete</button></div></div>`).join('')||'<p class="muted">No saved Wi-Fi sweeps yet.</p>';}
+function previewRemoteSurvey(){drawBase(); const pts=parseCoords(); if(remoteSurveyStart)marker(remoteSurveyStart.x,remoteSurveyStart.y,'survey','Start'); if(remoteSurveyEnd)marker(remoteSurveyEnd.x,remoteSurveyEnd.y,'survey','End'); setStatus(`Preview ready: ${pts.length} GPS points. Save to store this remote survey path.`)}
+async function saveRemoteSurvey(){if(!remoteSurveyStart){setStatus('Set a start point on the map first.');return} const mode=document.getElementById('rsMode').value; if(mode==='direct_path'&&!remoteSurveyEnd){setStatus('Direct Path needs an end point.');return} let pts; try{pts=parseCoords()}catch(e){setStatus(e.message);return} if(pts.length<1){setStatus('Paste at least one latitude,longitude point.');return} const payload={name:document.getElementById('rsName').value||'Remote Survey Path',survey_mode:mode,path_type:document.getElementById('rsType').value,start_map_x:remoteSurveyStart.x,start_map_y:remoteSurveyStart.y,end_map_x:remoteSurveyEnd?.x??null,end_map_y:remoteSurveyEnd?.y??null,distance_meters:0,created_by:'dash_remote_survey',points:pts}; const saved=await api(`/events/${currentEvent.id}/survey-paths`,{method:'POST',body:JSON.stringify(payload)}); await loadSurveyPaths(); setSelected('survey',saved.id); setTab('data'); renderSurveyPaths(); drawBase(); setStatus(`Saved remote survey with ${pts.length} GPS points.`)}
+async function loadWifiSweeps(){wifiSweeps=await api(`/events/${currentEvent.id}/wifi-sweeps`); const list=document.getElementById('wifiList'); list.innerHTML=wifiSweeps.map(s=>`<div class="card"><h3>${escapeHtml(s.name)}</h3><p>${s.sample_count} samples • ${escapeHtml(s.target_ssid||'All networks')}<br>${escapeHtml(s.created_at||'')}</p><div class="row"><button onclick="viewWifiSweep('${s.id}')">View Heatmap</button><button class="danger" onclick="deleteWifiSweep('${s.id}')">Delete</button></div></div>`).join('')||'<p class="muted">No saved Wi-Fi sweeps yet.</p>';}
 async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`); drawBase(); let drawn=0; (d.samples||[]).forEach(s=>{const x=s.map_x??s.mapX, y=s.map_y??s.mapY; if(x!=null&&y!=null){heat(x,y,s.rssi_dbm,`${s.ssid||''} ${s.rssi_dbm} dBm`); drawn++}}); setStatus(`Viewing ${d.name}: ${drawn}/${(d.samples||[]).length} samples placed on map. Samples without map_x/map_y need calibration at record time.`)}
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
@@ -927,6 +909,7 @@ init().catch(e=>setStatus('Startup failed: '+e.message));
 </body>
 </html>
 '''
+
 
 
 
@@ -1777,6 +1760,70 @@ def create_survey_path(event_id: str, payload: SurveyPathCreate):
                 ),
             )
 
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM survey_paths WHERE id = ? AND event_id = ?",
+            (path_id, event_id),
+        ).fetchone()
+
+    return survey_path_row_to_dict(row)
+
+
+@app.put("/events/{event_id}/survey-paths/{path_id}")
+def update_survey_path(event_id: str, path_id: str, payload: SurveyPathUpdate):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM survey_paths WHERE id = ? AND event_id = ?",
+            (path_id, event_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Survey path not found")
+
+        name = payload.name.strip() if payload.name is not None else existing["name"]
+        survey_mode = payload.survey_mode.strip().lower() if payload.survey_mode is not None else existing["survey_mode"]
+        path_type = payload.path_type.strip().lower() if payload.path_type is not None else existing["path_type"]
+
+        if survey_mode not in {"direct_path", "area_walk"}:
+            raise HTTPException(status_code=400, detail="survey_mode must be direct_path or area_walk")
+
+        if path_type not in {"guest", "staff", "cart", "restricted", "emergency"}:
+            raise HTTPException(status_code=400, detail="Unsupported path_type")
+
+        start_map_x = payload.start_map_x if payload.start_map_x is not None else existing["start_map_x"]
+        start_map_y = payload.start_map_y if payload.start_map_y is not None else existing["start_map_y"]
+        end_map_x = payload.end_map_x if payload.end_map_x is not None else existing["end_map_x"]
+        end_map_y = payload.end_map_y if payload.end_map_y is not None else existing["end_map_y"]
+        distance_meters = payload.distance_meters if payload.distance_meters is not None else existing["distance_meters"]
+
+        conn.execute(
+            """
+            UPDATE survey_paths
+            SET
+                name = ?,
+                survey_mode = ?,
+                path_type = ?,
+                start_map_x = ?,
+                start_map_y = ?,
+                end_map_x = ?,
+                end_map_y = ?,
+                distance_meters = ?
+            WHERE id = ? AND event_id = ?
+            """,
+            (
+                name,
+                survey_mode,
+                path_type,
+                start_map_x,
+                start_map_y,
+                end_map_x,
+                end_map_y,
+                distance_meters,
+                path_id,
+                event_id,
+            ),
+        )
         conn.commit()
 
         row = conn.execute(
