@@ -189,6 +189,28 @@ class SurveyPathCreate(BaseModel):
     created_by: Optional[str] = "android_survey"
     points: List[SurveyPathPointCreate] = []
 
+
+class WifiSweepSampleCreate(BaseModel):
+    seq: int
+    latitude: float
+    longitude: float
+    accuracy_meters: Optional[float] = None
+    map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    ssid: Optional[str] = Field(default=None, max_length=160)
+    bssid: Optional[str] = Field(default=None, max_length=80)
+    rssi_dbm: int
+    frequency_mhz: Optional[int] = None
+    timestamp: Optional[str] = None
+
+
+class WifiSweepCreate(BaseModel):
+    name: str = Field(default="WiFi Sweep", min_length=1, max_length=160)
+    target_ssid: Optional[str] = Field(default=None, max_length=160)
+    target_bssid: Optional[str] = Field(default=None, max_length=80)
+    created_by: Optional[str] = "android_wifi_sweeper"
+    samples: List[WifiSweepSampleCreate] = []
+
 class InferGpsRequest(BaseModel):
     anchor_ids: Optional[List[str]] = None
     overwrite_existing: bool = False
@@ -306,6 +328,40 @@ def survey_point_row_to_dict(row: sqlite3.Row) -> dict:
         "latitude": row["latitude"],
         "longitude": row["longitude"],
         "accuracy_meters": row["accuracy_meters"],
+        "timestamp": row["timestamp"],
+    }
+
+
+def wifi_sweep_row_to_dict(row: sqlite3.Row, samples=None) -> dict:
+    payload = {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "target_ssid": row["target_ssid"],
+        "target_bssid": row["target_bssid"],
+        "sample_count": row["sample_count"],
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+    }
+    if samples is not None:
+        payload["samples"] = samples
+    return payload
+
+
+def wifi_sample_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "seq": row["seq"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "ssid": row["ssid"],
+        "bssid": row["bssid"],
+        "rssi_dbm": row["rssi_dbm"],
+        "frequency_mhz": row["frequency_mhz"],
         "timestamp": row["timestamp"],
     }
 
@@ -466,6 +522,57 @@ def init_db():
             ON survey_path_points(path_id)
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wifi_sweeps (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                target_ssid TEXT,
+                target_bssid TEXT,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_wifi_sweeps_event_id
+            ON wifi_sweeps(event_id)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wifi_sweep_samples (
+                id TEXT PRIMARY KEY,
+                sweep_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                accuracy_meters REAL,
+                map_x REAL,
+                map_y REAL,
+                ssid TEXT,
+                bssid TEXT,
+                rssi_dbm INTEGER NOT NULL,
+                frequency_mhz INTEGER,
+                timestamp TEXT,
+                FOREIGN KEY(sweep_id) REFERENCES wifi_sweeps(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_wifi_sweep_samples_sweep_id
+            ON wifi_sweep_samples(sweep_id)
+            """
+        )
+
 
         # Lightweight migrations for older beacon.db files.
         existing_columns = {
@@ -650,6 +757,7 @@ def health():
         count = conn.execute("SELECT COUNT(*) AS count FROM pois").fetchone()["count"]
         beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
         wrstops_gate_count = conn.execute("SELECT COUNT(*) AS count FROM wrstops_gates").fetchone()["count"]
+        wifi_sweep_count = conn.execute("SELECT COUNT(*) AS count FROM wifi_sweeps").fetchone()["count"]
 
     return {
         "status": "ok",
@@ -657,6 +765,7 @@ def health():
         "poi_count": count,
         "beacon_count": beacon_count,
         "wrstops_gate_count": wrstops_gate_count,
+        "wifi_sweep_count": wifi_sweep_count,
         "maps": [map_file_status(event["map_name"]) for event in EVENTS],
         "time": now_iso(),
     }
@@ -1794,6 +1903,134 @@ def infer_gps_from_map(payload: InferGpsRequest):
         "transform": transform,
         "anchor_diagnostics": diagnostics,
         "updated": updated,
+    }
+
+
+
+@app.get("/events/{event_id}/wifi-sweeps")
+def get_wifi_sweeps(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM wifi_sweeps
+            WHERE event_id = ?
+            ORDER BY created_at DESC
+            """,
+            (event_id,),
+        ).fetchall()
+
+    return [wifi_sweep_row_to_dict(row) for row in rows]
+
+
+@app.get("/events/{event_id}/wifi-sweeps/{sweep_id}")
+def get_wifi_sweep(event_id: str, sweep_id: str):
+    with get_connection() as conn:
+        sweep = conn.execute(
+            "SELECT * FROM wifi_sweeps WHERE event_id = ? AND id = ?",
+            (event_id, sweep_id),
+        ).fetchone()
+
+        if sweep is None:
+            raise HTTPException(status_code=404, detail="WiFi sweep not found")
+
+        sample_rows = conn.execute(
+            """
+            SELECT *
+            FROM wifi_sweep_samples
+            WHERE sweep_id = ?
+            ORDER BY seq ASC
+            """,
+            (sweep_id,),
+        ).fetchall()
+
+    return wifi_sweep_row_to_dict(
+        sweep,
+        [wifi_sample_row_to_dict(row) for row in sample_rows],
+    )
+
+
+@app.post("/events/{event_id}/wifi-sweeps")
+def create_wifi_sweep(event_id: str, payload: WifiSweepCreate):
+    sweep_id = "wifi_" + uuid4().hex[:12]
+    timestamp = now_iso()
+    samples = payload.samples or []
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO wifi_sweeps (
+                id, event_id, name, target_ssid, target_bssid,
+                sample_count, created_at, created_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sweep_id,
+                event_id,
+                payload.name,
+                payload.target_ssid,
+                payload.target_bssid,
+                len(samples),
+                timestamp,
+                payload.created_by,
+            ),
+        )
+
+        for point in samples:
+            conn.execute(
+                """
+                INSERT INTO wifi_sweep_samples (
+                    id, sweep_id, seq, latitude, longitude, accuracy_meters,
+                    map_x, map_y, ssid, bssid, rssi_dbm, frequency_mhz, timestamp
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "wifi_sample_" + uuid4().hex[:12],
+                    sweep_id,
+                    point.seq,
+                    point.latitude,
+                    point.longitude,
+                    point.accuracy_meters,
+                    point.map_x,
+                    point.map_y,
+                    point.ssid,
+                    point.bssid,
+                    point.rssi_dbm,
+                    point.frequency_mhz,
+                    point.timestamp or timestamp,
+                ),
+            )
+
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM wifi_sweeps WHERE id = ?",
+            (sweep_id,),
+        ).fetchone()
+
+    return wifi_sweep_row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/wifi-sweeps/{sweep_id}")
+def delete_wifi_sweep(event_id: str, sweep_id: str):
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT * FROM wifi_sweeps WHERE event_id = ? AND id = ?",
+            (event_id, sweep_id),
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="WiFi sweep not found")
+
+        conn.execute("DELETE FROM wifi_sweep_samples WHERE sweep_id = ?", (sweep_id,))
+        conn.execute("DELETE FROM wifi_sweeps WHERE id = ?", (sweep_id,))
+        conn.commit()
+
+    return {
+        "deleted": True,
+        "id": sweep_id,
     }
 
 
