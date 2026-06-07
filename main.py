@@ -140,6 +140,9 @@ class WrstopsGateCreate(BaseModel):
     name: str = Field(default="Gate", min_length=1, max_length=120)
     map_x: float = Field(ge=0.0, le=1.0)
     map_y: float = Field(ge=0.0, le=1.0)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy_meters: Optional[float] = None
     scan_count: Optional[int] = 0
     connection_status: Optional[str] = Field(default="ONLINE", max_length=40)
     ip_address: Optional[str] = Field(default=None, max_length=80)
@@ -151,6 +154,9 @@ class WrstopsGateUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy_meters: Optional[float] = None
     scan_count: Optional[int] = None
     connection_status: Optional[str] = Field(default=None, max_length=40)
     ip_address: Optional[str] = Field(default=None, max_length=80)
@@ -285,6 +291,9 @@ def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
         # Android compatibility aliases.
         "mapX": row["map_x"],
         "mapY": row["map_y"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
         "scan_count": row["scan_count"],
         "connection_status": row["connection_status"],
         "ip_address": row["ip_address"],
@@ -444,6 +453,9 @@ def init_db():
                 name TEXT NOT NULL,
                 map_x REAL NOT NULL,
                 map_y REAL NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                accuracy_meters REAL,
                 scan_count INTEGER NOT NULL DEFAULT 0,
                 connection_status TEXT NOT NULL DEFAULT 'ONLINE',
                 ip_address TEXT,
@@ -461,6 +473,18 @@ def init_db():
             ON wrstops_gates(event_id)
             """
         )
+
+        existing_gate_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(wrstops_gates)").fetchall()
+        }
+
+        if "latitude" not in existing_gate_columns:
+            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN latitude REAL")
+        if "longitude" not in existing_gate_columns:
+            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN longitude REAL")
+        if "accuracy_meters" not in existing_gate_columns:
+            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN accuracy_meters REAL")
 
 
         conn.execute(
@@ -865,7 +889,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS'}[tab]||tab; clearOverlay(); if(tab==='wifi')loadWifiSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS'}[tab]||tab; clearOverlay(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId))el.classList.add('selected'); el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} document.getElementById('mapWrap').appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -873,26 +897,29 @@ function heat(x,y,rssi,title){const el=marker(x,y,'heat',title); el.style.backgr
 function clearOverlay(){document.querySelectorAll('.marker').forEach(e=>e.remove()); document.getElementById('pathSvg').innerHTML='';}
 function drawBase(){clearOverlay(); pois.forEach(p=>marker(p.map_x,p.map_y,'poi',`${p.id} ${p.name}`,()=>selectPoi(p.id))); gates.forEach(g=>marker(g.map_x,g.map_y,'gate',`${g.id} ${g.name}`,()=>selectGate(g.id))); mapAnchors.forEach(a=>marker(a.map_x,a.map_y,'anchor',`anchor ${a.id}`,()=>selectAnchor(a.id))); if(dataMode==='survey')drawSurveyPaths();}
 function mapXY(evt){const rect=document.getElementById('mapWrap').getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(evt.clientX-rect.left)/rect.width)), y:Math.max(0,Math.min(1,(evt.clientY-rect.top)/rect.height))}}
-document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} mapClickMode=null;});
+document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='moveGate'&&selectedKind==='gate'){document.getElementById('editGateMapX').value=p.x.toFixed(4); document.getElementById('editGateMapY').value=p.y.toFixed(4); setStatus('WRSTOPS gate map position updated in editor. Click Save Gate.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} mapClickMode=null;});
 function updateSurveyInfo(){document.getElementById('rsMapInfo').textContent=`Start: ${remoteSurveyStart?remoteSurveyStart.x.toFixed(4)+', '+remoteSurveyStart.y.toFixed(4):'not set'} • End: ${remoteSurveyEnd?remoteSurveyEnd.x.toFixed(4)+', '+remoteSurveyEnd.y.toFixed(4):'not set'}`}
 async function init(){events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent(events[0]?.id||'lib_2026');}
 async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const wrap=document.getElementById('mapWrap'); wrap.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.src=currentEvent.map_url; img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; wrap.prepend(ph)}; wrap.prepend(img); selectedKind=null; selectedId=null; await refreshAll();}
 async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/wrstops-gates`),api(`/events/${currentEvent.id}/calibration-anchors`)]); if(dataMode==='survey')surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`); drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
-function selectPoi(id){setSelected('poi',id); setTab('data'); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}
+function selectPoi(id){setSelected('poi',id); setTab('data', false); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}
 async function loadPois(){dataMode='pois'; pois=await api(`/events/${currentEvent.id}/pois`); setSelected(selectedKind==='poi'?'poi':null, selectedKind==='poi'?selectedId:null); renderPois(); drawBase();}
 function renderPois(){const list=document.getElementById('dataList'); list.innerHTML=pois.map(p=>{const sel=selectedKind==='poi'&&selectedId===p.id; return `<div class="card ${sel?'selected':''}" id="poi-${p.id}" onclick="selectPoi('${p.id}')"><h3>${escapeHtml(p.name)}</h3><p>${escapeHtml(p.category)} • map ${n3(p.map_x)}, ${n3(p.map_y)}</p>${sel?poiEditor(p):''}</div>`}).join('')||'<p class="muted">No POIs.</p>';}
 function poiEditor(p){return `<label>Name</label><input id="editPoiName" value="${escapeHtml(p.name)}"><label>Category</label><input id="editPoiCategory" value="${escapeHtml(p.category)}"><div class="row"><div><label>Map X</label><input id="editPoiMapX" value="${n4(p.map_x)}"></div><div><label>Map Y</label><input id="editPoiMapY" value="${n4(p.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editPoiLat" value="${p.latitude??''}"></div><div><label>Longitude</label><input id="editPoiLng" value="${p.longitude??''}"></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); savePoi('${p.id}')">Save POI</button><button onclick="event.stopPropagation(); mapClickMode='movePoi'; setStatus('Click map to move selected POI.')">Move on Map</button><button class="danger" onclick="event.stopPropagation(); deletePoi('${p.id}')">Delete</button></div>`}
 async function savePoi(id){const lat=document.getElementById('editPoiLat').value.trim(), lng=document.getElementById('editPoiLng').value.trim(); const payload={name:document.getElementById('editPoiName').value,category:document.getElementById('editPoiCategory').value,map_x:parseFloat(document.getElementById('editPoiMapX').value),map_y:parseFloat(document.getElementById('editPoiMapY').value),updated_by:'dash_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} await api(`/events/${currentEvent.id}/pois/${id}`,{method:'PUT',body:JSON.stringify(payload)}); await loadPois(); setSelected('poi',id); renderPois(); drawBase(); setStatus('Saved POI.');}
 async function deletePoi(id){if(!confirm('Delete this POI?'))return; await api(`/events/${currentEvent.id}/pois/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadPois(); setStatus('Deleted POI.');}
-function selectGate(id){setSelected('gate',id); setTab('data'); dataMode='gates'; renderGates(); drawBase(); setStatus('Selected WRSTOPS gate.');}
+function selectGate(id){setSelected('gate',id); setTab('data', false); dataMode='gates'; renderGates(); drawBase(); setStatus('Selected WRSTOPS gate.');}
 async function loadGates(){dataMode='gates'; gates=await api(`/events/${currentEvent.id}/wrstops-gates`); renderGates(); drawBase();}
-function renderGates(){document.getElementById('dataList').innerHTML=gates.map(g=>`<div class="card ${selectedKind==='gate'&&selectedId===g.id?'selected':''}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}</p></div>`).join('')||'<p class="muted">No gates.</p>';}
+function renderGates(){const list=document.getElementById('dataList'); list.innerHTML=gates.map(g=>{const sel=selectedKind==='gate'&&selectedId===g.id; return `<div class="card ${sel?'selected':''}" id="gate-${g.id}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}${g.latitude!=null&&g.longitude!=null?'<br>GPS '+g.latitude+', '+g.longitude:''}</p>${sel?gateEditor(g):''}</div>`}).join('')||'<p class="muted">No gates.</p>';}
+function gateEditor(g){return `<label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div><div class="row"><div><label>Status</label><select id="editGateStatus"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Gate</button><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move selected WRSTOPS gate.')">Move on Map</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div>`}
+async function saveGate(id){const lat=document.getElementById('editGateLat').value.trim(), lng=document.getElementById('editGateLng').value.trim(); const payload={name:document.getElementById('editGateName').value,map_x:parseFloat(document.getElementById('editGateMapX').value),map_y:parseFloat(document.getElementById('editGateMapY').value),scan_count:parseInt(document.getElementById('editGateScans').value||'0',10),connection_status:document.getElementById('editGateStatus').value,override_status:document.getElementById('editGateOverride').value,ip_address:document.getElementById('editGateIp').value,updated_by:'dash_gate_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} await api(`/events/${currentEvent.id}/wrstops-gates/${id}`,{method:'PUT',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',id); renderGates(); drawBase(); setStatus('Saved WRSTOPS gate.');}
+async function deleteGate(id){if(!confirm('Delete this WRSTOPS gate?'))return; await api(`/events/${currentEvent.id}/wrstops-gates/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadGates(); setStatus('Deleted WRSTOPS gate.');}
 function selectAnchor(id){setSelected('anchor',id); setTab('calibration'); loadAnchors().then(()=>setStatus('Selected calibration anchor.'));}
 async function loadAnchors(){mapAnchors=await api(`/events/${currentEvent.id}/calibration-anchors`); document.getElementById('anchorList').innerHTML=mapAnchors.map(a=>`<div class="card ${selectedKind==='anchor'&&selectedId===a.id?'selected':''}" onclick="selectAnchor('${a.id}')"><h3>Anchor</h3><p>map ${n4(a.map_x)}, ${n4(a.map_y)}<br>${a.latitude}, ${a.longitude}</p><button class="danger" onclick="event.stopPropagation(); deleteAnchor('${a.id}')">Delete</button></div>`).join('')||'<p class="muted">No anchors.</p>'; drawBase();}
 async function deleteAnchor(id){if(!confirm('Delete this calibration anchor?'))return; await api(`/events/${currentEvent.id}/calibration-anchors/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadAnchors(); setStatus('Deleted calibration anchor.');}
 async function saveCalibrationAnchor(){if(!calibrationMapPoint){setStatus('Click a map point first.');return} const lat=parseFloat(document.getElementById('calLat').value), lng=parseFloat(document.getElementById('calLng').value); if(!Number.isFinite(lat)||!Number.isFinite(lng)){setStatus('Enter valid latitude and longitude.');return} await api(`/events/${currentEvent.id}/calibration-anchors`,{method:'POST',body:JSON.stringify({map_x:calibrationMapPoint.x,map_y:calibrationMapPoint.y,latitude:lat,longitude:lng,accuracy_meters:0,created_by:'dash_remote'})}); calibrationMapPoint=null; document.getElementById('calMapInfo').textContent='Anchor saved.'; await loadAnchors(); setStatus('Saved remote calibration anchor.');}
 function drawSurveyPaths(){const svg=document.getElementById('pathSvg'); surveyPaths.forEach(sp=>{if(sp.start_map_x==null||sp.start_map_y==null)return; marker(sp.start_map_x,sp.start_map_y,'survey',`${sp.id} start`,()=>selectSurveyPath(sp.id)); if(sp.end_map_x!=null&&sp.end_map_y!=null){marker(sp.end_map_x,sp.end_map_y,'survey',`${sp.id} end`,()=>selectSurveyPath(sp.id)); const line=document.createElementNS('http://www.w3.org/2000/svg','line'); line.setAttribute('x1',sp.start_map_x*1000); line.setAttribute('y1',sp.start_map_y*562); line.setAttribute('x2',sp.end_map_x*1000); line.setAttribute('y2',sp.end_map_y*562); line.setAttribute('class','pathSvgLine '+(selectedKind==='survey'&&selectedId===sp.id?'selected':'')); line.style.pointerEvents='auto'; line.onclick=(ev)=>{ev.stopPropagation(); selectSurveyPath(sp.id)}; svg.appendChild(line);}})}
-function selectSurveyPath(id){setSelected('survey',id); setTab('data'); dataMode='survey'; renderSurveyPaths(); drawBase(); setStatus('Selected survey path.');}
+function selectSurveyPath(id){setSelected('survey',id); setTab('data', false); dataMode='survey'; renderSurveyPaths(); drawBase(); setStatus('Selected survey path.');}
 async function loadSurveyPaths(){dataMode='survey'; surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`); renderSurveyPaths(); drawBase();}
 function renderSurveyPaths(){const list=document.getElementById('dataList'); list.innerHTML=surveyPaths.map(sp=>{const sel=selectedKind==='survey'&&selectedId===sp.id; return `<div class="card ${sel?'selected':''}" onclick="selectSurveyPath('${sp.id}')"><h3>${escapeHtml(sp.name)}</h3><p>${escapeHtml(sp.survey_mode)} • ${escapeHtml(sp.path_type)} • ${sp.point_count} GPS points<br>start ${n3(sp.start_map_x)}, ${n3(sp.start_map_y)} ${sp.end_map_x!=null?'→ end '+n3(sp.end_map_x)+', '+n3(sp.end_map_y):''}</p>${sel?surveyEditor(sp):''}</div>`}).join('')||'<p class="muted">No survey paths.</p>';}
 function surveyEditor(sp){return `<label>Name</label><input id="editSurveyName" value="${escapeHtml(sp.name)}"><div class="row"><div><label>Mode</label><select id="editSurveyMode"><option value="direct_path" ${sp.survey_mode==='direct_path'?'selected':''}>Direct Path</option><option value="area_walk" ${sp.survey_mode==='area_walk'?'selected':''}>Area Walk</option></select></div><div><label>Type</label><select id="editSurveyType"><option value="guest" ${sp.path_type==='guest'?'selected':''}>Guest</option><option value="staff" ${sp.path_type==='staff'?'selected':''}>Staff</option><option value="cart" ${sp.path_type==='cart'?'selected':''}>Cart</option><option value="restricted" ${sp.path_type==='restricted'?'selected':''}>Restricted</option><option value="emergency" ${sp.path_type==='emergency'?'selected':''}>Emergency</option></select></div></div><div class="row"><div><label>Start X</label><input id="editSurveyStartX" value="${n4(sp.start_map_x)}"></div><div><label>Start Y</label><input id="editSurveyStartY" value="${n4(sp.start_map_y)}"></div></div><div class="row"><div><label>End X</label><input id="editSurveyEndX" value="${sp.end_map_x??''}"></div><div><label>End Y</label><input id="editSurveyEndY" value="${sp.end_map_y??''}"></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveSurveyPath('${sp.id}')">Save Survey</button><button onclick="event.stopPropagation(); mapClickMode='surveyEditStart'; setStatus('Click map to set survey start.')">Move Start</button><button onclick="event.stopPropagation(); mapClickMode='surveyEditEnd'; setStatus('Click map to set survey end.')">Move End</button><button class="danger" onclick="event.stopPropagation(); deleteSurveyPath('${sp.id}')">Delete</button></div>`}
@@ -1470,11 +1497,11 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
         conn.execute(
             """
             INSERT INTO wrstops_gates (
-                id, event_id, name, map_x, map_y, scan_count,
+                id, event_id, name, map_x, map_y, latitude, longitude, accuracy_meters, scan_count,
                 connection_status, ip_address, override_status,
                 created_at, updated_at, updated_by
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gate_id,
@@ -1482,6 +1509,9 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
                 name,
                 payload.map_x,
                 payload.map_y,
+                payload.latitude,
+                payload.longitude,
+                payload.accuracy_meters,
                 scan_count,
                 connection_status,
                 payload.ip_address,
@@ -1515,6 +1545,13 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
         name = payload.name.strip() if payload.name is not None else existing["name"]
         map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
         map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+        latitude = payload.latitude if payload.latitude is not None else existing["latitude"]
+        longitude = payload.longitude if payload.longitude is not None else existing["longitude"]
+        accuracy_meters = (
+            payload.accuracy_meters
+            if payload.accuracy_meters is not None
+            else existing["accuracy_meters"]
+        )
         scan_count = payload.scan_count if payload.scan_count is not None else existing["scan_count"]
         connection_status = (
             payload.connection_status.strip().upper()
@@ -1535,6 +1572,9 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 name = ?,
                 map_x = ?,
                 map_y = ?,
+                latitude = ?,
+                longitude = ?,
+                accuracy_meters = ?,
                 scan_count = ?,
                 connection_status = ?,
                 ip_address = ?,
@@ -1547,6 +1587,9 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 name or existing["name"],
                 map_x,
                 map_y,
+                latitude,
+                longitude,
+                accuracy_meters,
                 scan_count,
                 connection_status or "ONLINE",
                 ip_address,
