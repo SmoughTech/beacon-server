@@ -56,7 +56,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.2.2")
+app = FastAPI(title="Beacon Server", version="3.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -228,6 +228,24 @@ class WifiSweepCreate(BaseModel):
     target_bssid: Optional[str] = Field(default=None, max_length=80)
     created_by: Optional[str] = "android_wifi_sweeper"
     samples: List[WifiSweepSampleCreate] = []
+
+
+class DeviceMapSweepCreate(BaseModel):
+    name: str = Field(default="Device Sweep", min_length=1, max_length=160)
+    map_x: float = Field(ge=0.0, le=1.0)
+    map_y: float = Field(ge=0.0, le=1.0)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    ble_total: int = 0
+    ble_strong: int = 0
+    ble_medium: int = 0
+    ble_weak: int = 0
+    wifi_total: int = 0
+    wifi_strong: int = 0
+    wifi_medium: int = 0
+    wifi_weak: int = 0
+    created_by: Optional[str] = Field(default="android_device_sweeper", max_length=120)
+
 
 class InferGpsRequest(BaseModel):
     anchor_ids: Optional[List[str]] = None
@@ -422,6 +440,30 @@ def message_board_post_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
     }
 
+
+
+def device_map_sweep_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "ble_total": row["ble_total"],
+        "ble_strong": row["ble_strong"],
+        "ble_medium": row["ble_medium"],
+        "ble_weak": row["ble_weak"],
+        "wifi_total": row["wifi_total"],
+        "wifi_strong": row["wifi_strong"],
+        "wifi_medium": row["wifi_medium"],
+        "wifi_weak": row["wifi_weak"],
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+    }
 
 def normalize_beacon_code(code: str) -> str:
     cleaned = "".join(ch for ch in code.upper().strip() if ch.isalnum())
@@ -657,6 +699,38 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_message_board_event_id_created
             ON message_board_posts(event_id, created_at)
+            """
+        )
+
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_map_sweeps (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                map_x REAL NOT NULL,
+                map_y REAL NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                ble_total INTEGER NOT NULL DEFAULT 0,
+                ble_strong INTEGER NOT NULL DEFAULT 0,
+                ble_medium INTEGER NOT NULL DEFAULT 0,
+                ble_weak INTEGER NOT NULL DEFAULT 0,
+                wifi_total INTEGER NOT NULL DEFAULT 0,
+                wifi_strong INTEGER NOT NULL DEFAULT 0,
+                wifi_medium INTEGER NOT NULL DEFAULT 0,
+                wifi_weak INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_map_sweeps_event_created
+            ON device_map_sweeps(event_id, created_at)
             """
         )
 
@@ -965,19 +1039,20 @@ DASH_HTML = r'''
     .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}
     .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}
     .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
-    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
+    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;box-shadow:0 2px 14px rgba(0,0,0,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#111;font-size:12px;text-shadow:0 1px 1px rgba(255,255,255,.25);pointer-events:none}.deviceBlobTag{position:absolute;transform:translate(-50%,0);background:rgba(16,28,43,.9);border:1px solid var(--line);border-radius:10px;padding:5px 8px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:none}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
     .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.mapControls{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(7,16,27,.72)}.mapControls label{margin:0;color:var(--muted);font-size:12px;white-space:nowrap}.mapControls input[type=range]{padding:0}.mapOpacityValue{min-width:42px;text-align:right;color:#b7d7ff;font-size:12px}.hidden{display:none!important}
   </style>
 </head>
 <body>
 <div class="app">
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
-  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="data">POIs / Survey / WRSTOPS</button><button class="tab" data-tab="messages">Messages</button></div><br />
+  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="data">POIs / Survey / WRSTOPS</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="layout">
     <div class="panel"><div class="panelHeader"><h2 id="mapTitle">Map</h2><button onclick="refreshAll()">Refresh</button></div><div class="panelBody"><div class="mapWrap" id="mapWrap"><div class="placeholder">Map loading...</div><svg class="pathLine" id="pathSvg" viewBox="0 0 1000 562" preserveAspectRatio="none"></svg></div><div class="mapControls"><label for="mapOpacity">Map opacity</label><input id="mapOpacity" type="range" min="15" max="100" value="100" oninput="setMapOpacity(this.value)"><span class="mapOpacityValue" id="mapOpacityValue">100%</span></div><div class="legend"><div class="grad"></div><span>Wi-Fi signal: green strongest → red weakest</span></div><div class="status" id="status">Ready.</div></div></div>
     <div class="panel"><div class="panelHeader"><h2 id="toolTitle">Overview</h2></div><div class="panelBody">
       <section id="tab-overview"><p class="muted">Click a POI, calibration anchor, or survey path directly on the map to select it. The matching item highlights in the list on the right and expands with edit/delete controls.</p><div class="card"><h3>Selection behavior</h3><p>POIs and survey paths are now linked both ways: map → list and list → map.</p></div></section>
       <section id="tab-wifi" class="hidden"><div class="row"><button onclick="loadWifiSweeps()">Refresh Sweeps</button><button class="ghost" onclick="clearOverlay(); drawBase();">Clear Layer</button></div><br /><div class="list" id="wifiList"></div></section>
+      <section id="tab-deviceSweeps" class="hidden"><p class="muted">Device Sweep blobs are saved from the Android map-side Device Sweeper. Toggle BLE/Wi-Fi to compare wireless activity at the same spot.</p><div class="row"><button onclick="loadDeviceSweeps()">Refresh Device Sweeps</button><button onclick="deviceSweepMode='BLE'; drawDeviceSweeps(); setStatus('Viewing BLE device blobs.')">View BLE</button><button onclick="deviceSweepMode='WIFI'; drawDeviceSweeps(); setStatus('Viewing Wi-Fi AP blobs.')">View Wi-Fi</button><button class="ghost" onclick="clearOverlay(); drawBase();">Clear Layer</button></div><br /><div class="list" id="deviceSweepList"></div></section>
       <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
       <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button><button onclick="inferCalibrationGpsFromMap()">Infer GPS from Selected Map Point</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section><section id="tab-messages" class="hidden"><p class="muted">Field-test message board. Use this for bug reports, feature requests, notes, or test feedback.</p><div class="card"><label>Name</label><input id="msgName" placeholder="Your name" /><label>Subject</label><input id="msgSubject" placeholder="Bug, idea, question..." /><label>Body</label><textarea id="msgBody" placeholder="What happened? What should change?" style="width:100%;min-height:120px;background:#0d1520;color:#f7fbff;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:10px;"></textarea><div class="row"><button class="primary" onclick="postMessageBoard()">Post Message</button><button onclick="loadMessageBoard()">Refresh</button></div></div><div class="list" id="messageList"></div></section>
       <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button onclick="loadGates()">WRSTOPS</button><button class="primary" onclick="startAddPoi()">+ POI</button><button class="primary" onclick="startAddGate()">+ Gate</button></div><br /><div id="dataList" class="list"></div></section>
@@ -986,7 +1061,7 @@ DASH_HTML = r'''
 </div>
 <script>
 let events=[], currentEvent=null, currentTab='overview', mapClickMode=null, dataMode='pois';
-let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[];
+let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[], deviceSweeps=[]; let deviceSweepMode="BLE";
 let mapOpacity=Number(localStorage.getItem('beaconDashMapOpacity')||100);
 function setMapOpacity(value){mapOpacity=Number(value)||100; localStorage.setItem('beaconDashMapOpacity',String(mapOpacity)); const img=document.querySelector('#mapWrap img'); if(img)img.style.opacity=(mapOpacity/100).toFixed(2); const val=document.getElementById('mapOpacityValue'); if(val)val.textContent=mapOpacity+'%'; const slider=document.getElementById('mapOpacity'); if(slider&&Number(slider.value)!==mapOpacity)slider.value=String(mapOpacity);}
 let remoteSurveyStart=null, remoteSurveyEnd=null, calibrationMapPoint=null;
@@ -997,7 +1072,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS',messages:'Messages'}[tab]||tab; clearOverlay(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS',messages:'Messages'}[tab]||tab; clearOverlay(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId))el.classList.add('selected'); el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} document.getElementById('mapWrap').appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -1048,6 +1123,14 @@ async function deleteSurveyPath(id){if(!confirm('Delete this survey path?'))retu
 function parseCoords(){const raw=document.getElementById('rsPoints').value.trim(); if(!raw)return[]; return raw.split(/\n+/).map((line,i)=>{const nums=line.match(/-?\d+(?:\.\d+)?/g)||[]; if(nums.length<2)throw new Error(`Line ${i+1} needs lat,lng`); return {seq:i,latitude:parseFloat(nums[0]),longitude:parseFloat(nums[1]),accuracy_meters:0,timestamp:new Date().toISOString()}})}
 function previewRemoteSurvey(){drawBase(); const pts=parseCoords(); if(remoteSurveyStart)marker(remoteSurveyStart.x,remoteSurveyStart.y,'survey','Start'); if(remoteSurveyEnd)marker(remoteSurveyEnd.x,remoteSurveyEnd.y,'survey','End'); setStatus(`Preview ready: ${pts.length} GPS points. Save to store this remote survey path.`)}
 async function saveRemoteSurvey(){if(!remoteSurveyStart){setStatus('Set a start point on the map first.');return} const mode=document.getElementById('rsMode').value; if(mode==='direct_path'&&!remoteSurveyEnd){setStatus('Direct Path needs an end point.');return} let pts; try{pts=parseCoords()}catch(e){setStatus(e.message);return} if(pts.length<1){setStatus('Paste at least one latitude,longitude point.');return} const payload={name:document.getElementById('rsName').value||'Remote Survey Path',survey_mode:mode,path_type:document.getElementById('rsType').value,start_map_x:remoteSurveyStart.x,start_map_y:remoteSurveyStart.y,end_map_x:remoteSurveyEnd?.x??null,end_map_y:remoteSurveyEnd?.y??null,distance_meters:0,created_by:'dash_remote_survey',points:pts}; const saved=await api(`/events/${currentEvent.id}/survey-paths`,{method:'POST',body:JSON.stringify(payload)}); await loadSurveyPaths(); setSelected('survey',saved.id); setTab('data'); renderSurveyPaths(); drawBase(); setStatus(`Saved remote survey with ${pts.length} GPS points.`)}
+
+function blobCircle(x,y,r,color,title){const el=document.createElement('div');el.className='deviceBlob';el.style.left=(x*100)+'%';el.style.top=(y*100)+'%';el.style.width=(r*2)+'px';el.style.height=(r*2)+'px';el.style.background=color;el.style.opacity='.78';el.title=title||'';document.getElementById('mapWrap').appendChild(el);return el}
+function blobLabel(x,y,dy,text){const el=document.createElement('div');el.className='deviceBlobLabel';el.style.left=(x*100)+'%';el.style.top=`calc(${y*100}% + ${dy}px)`;el.textContent=text;document.getElementById('mapWrap').appendChild(el)}
+function drawOneDeviceSweep(s){const x=s.map_x??s.mapX,y=s.map_y??s.mapY;if(x==null||y==null)return;const total=deviceSweepMode==='BLE'?(s.ble_total||0):(s.wifi_total||0);const strong=deviceSweepMode==='BLE'?(s.ble_strong||0):(s.wifi_strong||0);const medium=deviceSweepMode==='BLE'?(s.ble_medium||0):(s.wifi_medium||0);const weak=deviceSweepMode==='BLE'?(s.ble_weak||0):(s.wifi_weak||0);const outer=Math.max(48,Math.min(170,46+total*.75));const mid=Math.max(30,outer*.58);const inner=Math.max(20,outer*.24);const title=`${s.name} ${deviceSweepMode}: ${total}`;blobCircle(x,y,outer,'#ff7a1a',title);blobCircle(x,y,mid,'#fff200',title);blobCircle(x,y,inner,'#18b957',title);blobLabel(x,y,-outer*.72,String(weak));blobLabel(x,y,-mid*.72,String(medium));blobLabel(x,y,0,String(strong));const tag=document.createElement('div');tag.className='deviceBlobTag';tag.style.left=(x*100)+'%';tag.style.top=`calc(${y*100}% + ${outer+8}px)`;tag.textContent=`${s.name} • ${deviceSweepMode} ${total}`;document.getElementById('mapWrap').appendChild(tag)}
+function drawDeviceSweeps(){drawBase(); deviceSweeps.forEach(drawOneDeviceSweep); setStatus(`Viewing ${deviceSweeps.length} device sweep blobs in ${deviceSweepMode} mode.`)}
+async function loadDeviceSweeps(){deviceSweeps=await api(`/events/${currentEvent.id}/device-map-sweeps`); const list=document.getElementById('deviceSweepList'); list.innerHTML=deviceSweeps.map(s=>`<div class="card"><h3>${escapeHtml(s.name)}</h3><p>BLE ${s.ble_total||0} (${s.ble_strong||0}/${s.ble_medium||0}/${s.ble_weak||0}) • Wi-Fi ${s.wifi_total||0} (${s.wifi_strong||0}/${s.wifi_medium||0}/${s.wifi_weak||0})<br>map ${n4(s.map_x)}, ${n4(s.map_y)} • ${escapeHtml(s.created_at||'')}</p><div class="row"><button onclick="deviceSweeps=[deviceSweeps.find(x=>x.id==='${s.id}')].filter(Boolean); drawDeviceSweeps()">View Only</button><button onclick="loadDeviceSweeps().then(drawDeviceSweeps)">View All</button><button class="danger" onclick="deleteDeviceSweep('${s.id}')">Delete</button></div></div>`).join('')||'<p class="muted">No saved device sweeps yet.</p>'; drawDeviceSweeps()}
+async function deleteDeviceSweep(id){if(!confirm('Delete this device sweep?'))return; await api(`/events/${currentEvent.id}/device-map-sweeps/${id}`,{method:'DELETE'}); await loadDeviceSweeps(); setStatus('Deleted device sweep.')}
+
 async function loadWifiSweeps(){wifiSweeps=await api(`/events/${currentEvent.id}/wifi-sweeps`); const list=document.getElementById('wifiList'); list.innerHTML=wifiSweeps.map(s=>`<div class="card"><h3>${escapeHtml(s.name)}</h3><p>${s.sample_count} samples • ${escapeHtml(s.target_ssid||'All networks')}<br>${escapeHtml(s.created_at||'')}</p><div class="row"><button onclick="viewWifiSweep('${s.id}')">View Heatmap</button><button class="danger" onclick="deleteWifiSweep('${s.id}')">Delete</button></div></div>`).join('')||'<p class="muted">No saved Wi-Fi sweeps yet.</p>';}
 async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`); drawBase(); let drawn=0; (d.samples||[]).forEach(s=>{const x=s.map_x??s.mapX, y=s.map_y??s.mapY; if(x!=null&&y!=null){heat(x,y,s.rssi_dbm,`${s.ssid||''} ${s.rssi_dbm} dBm`); drawn++}}); setStatus(`Viewing ${d.name}: ${drawn}/${(d.samples||[]).length} samples placed on map. Samples without map_x/map_y need calibration at record time.`)}
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
@@ -2342,6 +2425,88 @@ def infer_gps_from_map(payload: InferGpsRequest):
         "updated": updated,
     }
 
+
+
+
+@app.get("/events/{event_id}/device-map-sweeps")
+def list_device_map_sweeps(event_id: str):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM device_map_sweeps
+            WHERE event_id = ?
+            ORDER BY created_at DESC
+            """,
+            (event_id,),
+        ).fetchall()
+    return [device_map_sweep_row_to_dict(row) for row in rows]
+
+
+@app.get("/events/{event_id}/device-map-sweeps/{sweep_id}")
+def get_device_map_sweep(event_id: str, sweep_id: str):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM device_map_sweeps WHERE id = ? AND event_id = ?",
+            (sweep_id, event_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Device map sweep not found")
+    return device_map_sweep_row_to_dict(row)
+
+
+@app.post("/events/{event_id}/device-map-sweeps")
+def create_device_map_sweep(event_id: str, payload: DeviceMapSweepCreate):
+    sweep_id = "device_sweep_" + uuid4().hex[:12]
+    timestamp = now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO device_map_sweeps (
+                id, event_id, name, map_x, map_y, latitude, longitude,
+                ble_total, ble_strong, ble_medium, ble_weak,
+                wifi_total, wifi_strong, wifi_medium, wifi_weak,
+                created_at, created_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sweep_id,
+                event_id,
+                payload.name,
+                payload.map_x,
+                payload.map_y,
+                payload.latitude,
+                payload.longitude,
+                payload.ble_total,
+                payload.ble_strong,
+                payload.ble_medium,
+                payload.ble_weak,
+                payload.wifi_total,
+                payload.wifi_strong,
+                payload.wifi_medium,
+                payload.wifi_weak,
+                timestamp,
+                payload.created_by,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM device_map_sweeps WHERE id = ? AND event_id = ?",
+            (sweep_id, event_id),
+        ).fetchone()
+    return device_map_sweep_row_to_dict(row)
+
+
+@app.delete("/events/{event_id}/device-map-sweeps/{sweep_id}")
+def delete_device_map_sweep(event_id: str, sweep_id: str):
+    with get_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM device_map_sweeps WHERE id = ? AND event_id = ?",
+            (sweep_id, event_id),
+        )
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Device map sweep not found")
+    return {"ok": True, "deleted_id": sweep_id}
 
 
 @app.get("/events/{event_id}/wifi-sweeps")
