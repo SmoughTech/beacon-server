@@ -2260,6 +2260,75 @@ def create_wifi_sweep(event_id: str, payload: WifiSweepCreate):
     return wifi_sweep_row_to_dict(row)
 
 
+@app.post("/events/{event_id}/wifi-sweeps/{sweep_id}/samples")
+def append_wifi_sweep_samples(event_id: str, sweep_id: str, samples: List[WifiSweepSampleCreate]):
+    """
+    Appends additional samples to an existing Wi-Fi sweep so the Android app can
+    resume a saved sweep and continue mapping from where it left off.
+    """
+    timestamp = now_iso()
+
+    with get_connection() as conn:
+        sweep = conn.execute(
+            "SELECT * FROM wifi_sweeps WHERE event_id = ? AND id = ?",
+            (event_id, sweep_id),
+        ).fetchone()
+
+        if sweep is None:
+            raise HTTPException(status_code=404, detail="WiFi sweep not found")
+
+        current_max = conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) AS max_seq FROM wifi_sweep_samples WHERE sweep_id = ?",
+            (sweep_id,),
+        ).fetchone()["max_seq"]
+
+        start_seq = int(current_max) + 1
+
+        for offset, point in enumerate(samples or []):
+            conn.execute(
+                """
+                INSERT INTO wifi_sweep_samples (
+                    id, sweep_id, seq, latitude, longitude, accuracy_meters,
+                    map_x, map_y, ssid, bssid, rssi_dbm, frequency_mhz, timestamp
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "wifi_sample_" + uuid4().hex[:12],
+                    sweep_id,
+                    start_seq + offset,
+                    point.latitude,
+                    point.longitude,
+                    point.accuracy_meters,
+                    point.map_x,
+                    point.map_y,
+                    point.ssid,
+                    point.bssid,
+                    point.rssi_dbm,
+                    point.frequency_mhz,
+                    point.timestamp or timestamp,
+                ),
+            )
+
+        total_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM wifi_sweep_samples WHERE sweep_id = ?",
+            (sweep_id,),
+        ).fetchone()["count"]
+
+        conn.execute(
+            "UPDATE wifi_sweeps SET sample_count = ? WHERE id = ?",
+            (total_count, sweep_id),
+        )
+        conn.commit()
+
+        updated = conn.execute(
+            "SELECT * FROM wifi_sweeps WHERE id = ?",
+            (sweep_id,),
+        ).fetchone()
+
+    return wifi_sweep_row_to_dict(updated)
+
+
 @app.delete("/events/{event_id}/wifi-sweeps/{sweep_id}")
 def delete_wifi_sweep(event_id: str, sweep_id: str):
     with get_connection() as conn:
