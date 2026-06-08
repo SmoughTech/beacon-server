@@ -1052,7 +1052,7 @@ DASH_HTML = r'''
     <div class="panel"><div class="panelHeader"><h2 id="toolTitle">Overview</h2></div><div class="panelBody">
       <section id="tab-overview"><p class="muted">Click a POI, calibration anchor, or survey path directly on the map to select it. The matching item highlights in the list on the right and expands with edit/delete controls.</p><div class="card"><h3>Selection behavior</h3><p>POIs and survey paths are now linked both ways: map → list and list → map.</p></div></section>
       <section id="tab-wifi" class="hidden"><div class="row"><button onclick="loadWifiSweeps()">Refresh Sweeps</button><button class="ghost" onclick="clearOverlay(); drawBase();">Clear Layer</button></div><br /><div class="list" id="wifiList"></div></section>
-      <section id="tab-deviceSweeps" class="hidden"><p class="muted">Device Sweep blobs are saved from the Android map-side Device Sweeper. Select a saved sweep to inspect it, or view all as a cleaner overlay.</p><div class="row"><button onclick="loadDeviceSweeps()">Refresh</button><button id="dsBleBtn" onclick="setDeviceSweepMode('BLE')">BLE</button><button id="dsWifiBtn" onclick="setDeviceSweepMode('WIFI')">Wi-Fi</button><button onclick="viewAllDeviceSweeps()">View All</button><button class="ghost" onclick="selectedDeviceSweepId=null; deviceSweepShowAll=false; renderDeviceSweepList(); drawDeviceSweeps();">Hide Blobs</button></div><br /><div class="list" id="deviceSweepList"></div></section>
+      <section id="tab-deviceSweeps" class="hidden"><p class="muted">Device Sweep blobs are saved from the Android map-side Device Sweeper. Select a saved sweep to inspect it, or view all as a cleaner overlay.</p><div class="row"><button onclick="loadDeviceSweeps()">Refresh</button><button id="dsBleBtn" onclick="setDeviceSweepMode('BLE')">BLE</button><button id="dsWifiBtn" onclick="setDeviceSweepMode('WIFI')">Wi-Fi</button><button id="dsReadableBtn" onclick="setDeviceSweepView('readable')">Readable</button><button id="dsRangeBtn" onclick="setDeviceSweepView('range')">Range</button><button onclick="viewAllDeviceSweeps()">View All</button><button class="ghost" onclick="selectedDeviceSweepId=null; deviceSweepShowAll=false; renderDeviceSweepList(); drawDeviceSweeps();">Hide Blobs</button></div><br /><div class="list" id="deviceSweepList"></div></section>
       <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
       <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button><button onclick="inferCalibrationGpsFromMap()">Infer GPS from Selected Map Point</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section><section id="tab-messages" class="hidden"><p class="muted">Field-test message board. Use this for bug reports, feature requests, notes, or test feedback.</p><div class="card"><label>Name</label><input id="msgName" placeholder="Your name" /><label>Subject</label><input id="msgSubject" placeholder="Bug, idea, question..." /><label>Body</label><textarea id="msgBody" placeholder="What happened? What should change?" style="width:100%;min-height:120px;background:#0d1520;color:#f7fbff;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:10px;"></textarea><div class="row"><button class="primary" onclick="postMessageBoard()">Post Message</button><button onclick="loadMessageBoard()">Refresh</button></div></div><div class="list" id="messageList"></div></section>
       <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button onclick="loadGates()">WRSTOPS</button><button class="primary" onclick="startAddPoi()">+ POI</button><button class="primary" onclick="startAddGate()">+ Gate</button></div><br /><div id="dataList" class="list"></div></section>
@@ -1061,7 +1061,7 @@ DASH_HTML = r'''
 </div>
 <script>
 let events=[], currentEvent=null, currentTab='overview', mapClickMode=null, dataMode='pois';
-let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[], deviceSweeps=[]; let deviceSweepMode="BLE", selectedDeviceSweepId=null, deviceSweepShowAll=true;
+let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[], deviceSweeps=[]; let deviceSweepMode="BLE", deviceSweepView="readable", selectedDeviceSweepId=null, deviceSweepShowAll=true;
 let mapOpacity=Number(localStorage.getItem('beaconDashMapOpacity')||100);
 function setMapOpacity(value){mapOpacity=Number(value)||100; localStorage.setItem('beaconDashMapOpacity',String(mapOpacity)); const img=document.querySelector('#mapWrap img'); if(img)img.style.opacity=(mapOpacity/100).toFixed(2); const val=document.getElementById('mapOpacityValue'); if(val)val.textContent=mapOpacity+'%'; const slider=document.getElementById('mapOpacity'); if(slider&&Number(slider.value)!==mapOpacity)slider.value=String(mapOpacity);}
 let remoteSurveyStart=null, remoteSurveyEnd=null, calibrationMapPoint=null;
@@ -1133,27 +1133,60 @@ function deviceSweepCounts(s){
   return {mode,total,strong,medium,weak};
 }
 function setDeviceSweepMode(mode){deviceSweepMode=mode; renderDeviceSweepList(); drawDeviceSweeps(); setStatus(`Viewing ${mode==='BLE'?'BLE':'Wi-Fi'} device blobs.`)}
+function setDeviceSweepView(view){deviceSweepView=view; renderDeviceSweepList(); drawDeviceSweeps(); setStatus(view==='range'?'Viewing estimated signal range mode.':'Viewing readable exploded-count mode.');}
 function viewAllDeviceSweeps(){selectedDeviceSweepId=null; deviceSweepShowAll=true; renderDeviceSweepList(); drawDeviceSweeps();}
 function selectDeviceSweep(id){selectedDeviceSweepId=id; deviceSweepShowAll=false; renderDeviceSweepList(); drawDeviceSweeps(); setStatus('Selected device sweep.');}
 function visibleDeviceSweeps(){if(deviceSweepShowAll)return deviceSweeps; if(!selectedDeviceSweepId)return []; return deviceSweeps.filter(s=>s.id===selectedDeviceSweepId);}
+function haversineMeters(a,b){const R=6371000, toRad=d=>d*Math.PI/180; const dLat=toRad((b.latitude??0)-(a.latitude??0)), dLng=toRad((b.longitude??0)-(a.longitude??0)); const lat1=toRad(a.latitude??0), lat2=toRad(b.latitude??0); const h=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h));}
+function estimatedPxPerMeter(){
+  const wrap=document.getElementById('mapWrap'); const rect=wrap.getBoundingClientRect(); const vals=[];
+  for(let i=0;i<mapAnchors.length;i++)for(let j=i+1;j<mapAnchors.length;j++){
+    const a=mapAnchors[i], b=mapAnchors[j];
+    if(a.latitude==null||a.longitude==null||b.latitude==null||b.longitude==null)continue;
+    const meters=haversineMeters(a,b); if(!Number.isFinite(meters)||meters<2)continue;
+    const px=Math.hypot((a.map_x-b.map_x)*rect.width,(a.map_y-b.map_y)*rect.height); if(px>1)vals.push(px/meters);
+  }
+  if(!vals.length)return null; vals.sort((a,b)=>a-b); return vals[Math.floor(vals.length/2)];
+}
+function deviceRangeMeters(){
+  // These are intentionally approximate phone-observable signal zones, not a true people-count radius.
+  return deviceSweepMode==='BLE'
+    ? {strong:8, medium:22, weak:55}
+    : {strong:12, medium:35, weak:80};
+}
+function deviceSweepRadii(c){
+  if(deviceSweepView==='range'){
+    const m=deviceRangeMeters(); const ppm=estimatedPxPerMeter();
+    if(ppm){
+      const maxPx=Math.min(document.getElementById('mapWrap').clientWidth,document.getElementById('mapWrap').clientHeight)*0.32;
+      return {strong:Math.max(12,Math.min(maxPx*.45,m.strong*ppm)), medium:Math.max(22,Math.min(maxPx*.72,m.medium*ppm)), weak:Math.max(34,Math.min(maxPx,m.weak*ppm)), meters:m, scaled:true};
+    }
+    return {strong:24, medium:54, weak:92, meters:m, scaled:false};
+  }
+  const r=Math.max(deviceSweepShowAll?30:44,Math.min(deviceSweepShowAll?86:118,28+Math.sqrt(Math.max(c.total,1))*7));
+  return {strong:r*.32, medium:r*.62, weak:r, meters:null, scaled:false};
+}
 function drawOneDeviceSweep(s){
   const x=s.map_x??s.mapX, y=s.map_y??s.mapY; if(x==null||y==null)return;
-  const c=deviceSweepCounts(s); const selected=s.id===selectedDeviceSweepId;
-  const maxRadius=deviceSweepShowAll?86:118;
-  const minRadius=deviceSweepShowAll?30:44;
-  const r=Math.max(minRadius,Math.min(maxRadius,28+Math.sqrt(Math.max(c.total,1))*7));
+  const c=deviceSweepCounts(s); const selected=s.id===selectedDeviceSweepId; const radii=deviceSweepRadii(c); const r=radii.weak;
   const blob=document.createElement('div');
   blob.className='deviceBlob'+(selected?' selected':'');
   blob.style.left=(x*100)+'%'; blob.style.top=(y*100)+'%'; blob.style.width=(r*2)+'px'; blob.style.height=(r*2)+'px';
-  blob.style.opacity=deviceSweepShowAll&&!selected?'.58':'.78';
-  blob.style.background=`radial-gradient(circle, rgba(24,185,87,.72) 0 18%, rgba(255,242,0,.44) 36%, rgba(255,122,26,.25) 61%, rgba(255,122,26,0) 78%)`;
-  blob.title=`${s.name} • ${c.mode} total ${c.total}`;
+  blob.style.opacity=deviceSweepShowAll&&!selected?'.52':'.78';
+  const p1=Math.max(6,Math.min(30,(radii.strong/r)*100)); const p2=Math.max(p1+8,Math.min(62,(radii.medium/r)*100));
+  blob.style.background=`radial-gradient(circle, rgba(24,185,87,.70) 0 ${p1}%, rgba(24,185,87,.18) ${p1+6}%, rgba(255,242,0,.34) ${p2-8}%, rgba(255,242,0,.18) ${p2+6}%, rgba(255,122,26,.20) 78%, rgba(255,122,26,0) 100%)`;
+  blob.style.border=deviceSweepView==='range'?'1px solid rgba(255,255,255,.38)':'0';
+  blob.title=`${s.name} • ${c.mode} total ${c.total} • ${deviceSweepView==='range'?'estimated range':'readable view'}`;
   blob.onclick=(ev)=>{ev.stopPropagation(); selectDeviceSweep(s.id)};
   document.getElementById('mapWrap').appendChild(blob);
-  const labels=[{v:c.strong,dy:-r*.18},{v:c.medium,dy:r*.16},{v:c.weak,dy:r*.49}];
+  const center=document.createElement('div'); center.className='marker anchor'; center.style.left=(x*100)+'%'; center.style.top=(y*100)+'%'; center.title='Exact sweep point'; center.onclick=(ev)=>{ev.stopPropagation(); selectDeviceSweep(s.id)}; document.getElementById('mapWrap').appendChild(center);
+  const labels=deviceSweepView==='range'
+    ? [{v:c.strong,dy:-radii.strong*.45},{v:c.medium,dy:radii.medium*.18},{v:c.weak,dy:radii.weak*.48}]
+    : [{v:c.strong,dy:-r*.18},{v:c.medium,dy:r*.16},{v:c.weak,dy:r*.49}];
   labels.forEach(o=>{const el=document.createElement('div'); el.className='deviceBlobLabel'; el.style.left=(x*100)+'%'; el.style.top=`calc(${y*100}% + ${o.dy}px)`; el.textContent=String(o.v); document.getElementById('mapWrap').appendChild(el);});
   const card=document.createElement('div'); card.className='deviceBlobCard'+(selected?' selected':''); card.style.left=(x*100)+'%'; card.style.top=`calc(${y*100}% + ${r+10}px)`; card.onclick=(ev)=>{ev.stopPropagation(); selectDeviceSweep(s.id)};
-  card.innerHTML=`<b>${escapeHtml(s.name||'Device Sweep')}<span class="deviceSweepModePill">${c.mode==='BLE'?'BLE':'Wi-Fi'}</span></b><span class="deviceSweepStat">Total ${c.total} • S ${c.strong} / M ${c.medium} / W ${c.weak}</span>`;
+  const rangeNote=deviceSweepView==='range'&&radii.meters?`<span class="deviceSweepStat">Range est. S~${radii.meters.strong}m / M~${radii.meters.medium}m / W~${radii.meters.weak}m${radii.scaled?'':' • unscaled'}</span>`:'';
+  card.innerHTML=`<b>${escapeHtml(s.name||'Device Sweep')}<span class="deviceSweepModePill">${c.mode==='BLE'?'BLE':'Wi-Fi'}</span><span class="deviceSweepModePill">${deviceSweepView==='range'?'Range':'Readable'}</span></b><span class="deviceSweepStat">Total ${c.total} • S ${c.strong} / M ${c.medium} / W ${c.weak}</span>${rangeNote}`;
   document.getElementById('mapWrap').appendChild(card);
 }
 function drawDeviceSweeps(){
@@ -1167,7 +1200,9 @@ function renderDeviceSweepList(){
   const list=document.getElementById('deviceSweepList'); if(!list)return;
   document.getElementById('dsBleBtn')?.classList.toggle('primary',deviceSweepMode==='BLE');
   document.getElementById('dsWifiBtn')?.classList.toggle('primary',deviceSweepMode==='WIFI');
-  list.innerHTML=deviceSweeps.map(s=>{const c=deviceSweepCounts(s); const sel=s.id===selectedDeviceSweepId; return `<div class="card ${sel?'selected':''}" onclick="selectDeviceSweep('${s.id}')"><h3>${escapeHtml(s.name||'Device Sweep')}</h3><p><b>${c.mode==='BLE'?'BLE':'Wi-Fi'} total: ${c.total}</b><br>Strong ${c.strong} • Medium ${c.medium} • Weak ${c.weak}<br><span class="muted">BLE ${s.ble_total||0} (${s.ble_strong||0}/${s.ble_medium||0}/${s.ble_weak||0}) • Wi-Fi ${s.wifi_total||0} (${s.wifi_strong||0}/${s.wifi_medium||0}/${s.wifi_weak||0})</span><br>map ${n4(s.map_x)}, ${n4(s.map_y)} • ${escapeHtml(s.created_at||'')}</p><div class="row"><button onclick="event.stopPropagation(); selectDeviceSweep('${s.id}')">View</button><button onclick="event.stopPropagation(); viewAllDeviceSweeps()">All</button><button class="danger" onclick="event.stopPropagation(); deleteDeviceSweep('${s.id}')">Delete</button></div></div>`}).join('')||'<p class="muted">No saved device sweeps yet.</p>';
+  document.getElementById('dsReadableBtn')?.classList.toggle('primary',deviceSweepView==='readable');
+  document.getElementById('dsRangeBtn')?.classList.toggle('primary',deviceSweepView==='range');
+  list.innerHTML=deviceSweeps.map(s=>{const c=deviceSweepCounts(s); const sel=s.id===selectedDeviceSweepId; return `<div class="card ${sel?'selected':''}" onclick="selectDeviceSweep('${s.id}')"><h3>${escapeHtml(s.name||'Device Sweep')}</h3><p><b>${c.mode==='BLE'?'BLE':'Wi-Fi'} total: ${c.total}</b><br>Strong ${c.strong} • Medium ${c.medium} • Weak ${c.weak}<br><span class="muted">View: ${deviceSweepView==='range'?'estimated signal range':'readable exploded counts'}</span><br><span class="muted">BLE ${s.ble_total||0} (${s.ble_strong||0}/${s.ble_medium||0}/${s.ble_weak||0}) • Wi-Fi ${s.wifi_total||0} (${s.wifi_strong||0}/${s.wifi_medium||0}/${s.wifi_weak||0})</span><br>map ${n4(s.map_x)}, ${n4(s.map_y)} • ${escapeHtml(s.created_at||'')}</p><div class="row"><button onclick="event.stopPropagation(); selectDeviceSweep('${s.id}')">View</button><button onclick="event.stopPropagation(); viewAllDeviceSweeps()">All</button><button class="danger" onclick="event.stopPropagation(); deleteDeviceSweep('${s.id}')">Delete</button></div></div>`}).join('')||'<p class="muted">No saved device sweeps yet.</p>';
 }
 async function loadDeviceSweeps(){deviceSweeps=await api(`/events/${currentEvent.id}/device-map-sweeps`); if(selectedDeviceSweepId&&!deviceSweeps.some(s=>s.id===selectedDeviceSweepId))selectedDeviceSweepId=null; renderDeviceSweepList(); drawDeviceSweeps()}
 async function deleteDeviceSweep(id){if(!confirm('Delete this device sweep?'))return; await api(`/events/${currentEvent.id}/device-map-sweeps/${id}`,{method:'DELETE'}); if(selectedDeviceSweepId===id)selectedDeviceSweepId=null; await loadDeviceSweeps(); setStatus('Deleted device sweep.')}
