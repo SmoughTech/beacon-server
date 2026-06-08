@@ -238,6 +238,10 @@ class InferGpsRequest(BaseModel):
 class InferMapPositionRequest(BaseModel):
     latitude: float
     longitude: float
+
+
+class LiteAuthRequest(BaseModel):
+    password: str = Field(default="", max_length=200)
     min_anchors: int = 3
 
 
@@ -876,11 +880,24 @@ def beacon_lite():
     return HTMLResponse(LITE_HTML)
 
 
+@app.get("/lite-auth-status")
+def lite_auth_status():
+    # Does not expose the password; just helps confirm Render env is wired.
+    configured = bool(os.getenv("BEACON_LITE_PASSWORD"))
+    return {"ok": True, "password_configured": configured}
+
+
 @app.post("/lite-auth")
 def lite_auth(payload: LiteAuthRequest):
-    expected = os.getenv("BEACON_LITE_PASSWORD", "beacon")
-    if payload.password != expected:
+    expected = os.getenv("BEACON_LITE_PASSWORD", "beacon").strip()
+    supplied = (payload.password or "").strip()
+
+    if not expected:
+        raise HTTPException(status_code=500, detail="BEACON_LITE_PASSWORD is empty")
+
+    if supplied != expected:
         raise HTTPException(status_code=401, detail="Invalid Beacon Lite password")
+
     return {"ok": True}
 
 
