@@ -10,6 +10,8 @@ import math
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from access_control import enrich_wrstops_gate_dict, init_access_control_db, register_access_control
+
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "beacon.db")
 STATIC_DIR = os.getenv("STATIC_DIR", "static")
@@ -56,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.3.0")
+app = FastAPI(title="Beacon Server", version="3.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -367,9 +369,8 @@ def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
+        **enrich_wrstops_gate_dict(row),
     }
-
-
 
 
 def calibration_anchor_row_to_dict(row: sqlite3.Row) -> dict:
@@ -806,6 +807,8 @@ def init_db():
                 ),
             )
 
+        init_access_control_db(conn)
+
         conn.commit()
 
 
@@ -957,12 +960,15 @@ def startup():
     init_db()
 
 
+register_access_control(app, get_connection, now_iso)
+
+
 @app.get("/")
 def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.0.0",
+        "version": "3.4.0",
         "docs": "/docs",
     }
 
@@ -1074,7 +1080,7 @@ DASH_HTML = r'''
 <body>
 <div class="app">
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
-  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="data">POIs / Survey / WRSTOPS</button><button class="tab" data-tab="messages">Messages</button></div><br />
+  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="data">POIs / Survey / WRSTOPS</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashSearch"><input id="dashSearchInput" placeholder="Search gates, POIs, survey paths, anchors, device sweeps..." onkeydown="if(event.key==='Enter')dashSearch()" oninput="if(!this.value.trim())clearDashSearch()"><button class="primary" onclick="dashSearch()">Search</button><button class="ghost" onclick="clearDashSearch()">Clear</button><div id="dashSearchResults" class="searchResults"></div></div>
   <div class="layout">
     <div class="panel"><div class="panelHeader"><h2 id="mapTitle">Map</h2><button onclick="refreshAll()">Refresh</button></div><div class="panelBody"><div class="mapWrap" id="mapWrap"><div class="placeholder">Map loading...</div><svg class="pathLine" id="pathSvg" viewBox="0 0 1000 562" preserveAspectRatio="none"></svg></div><div class="mapControls"><label for="mapOpacity">Map opacity</label><input id="mapOpacity" type="range" min="15" max="100" value="100" oninput="setMapOpacity(this.value)"><span class="mapOpacityValue" id="mapOpacityValue">100%</span></div><div class="legend"><div class="grad"></div><span>Wi-Fi signal: green strongest → red weakest</span></div><div class="status" id="status">Ready.</div></div></div>
@@ -1085,6 +1091,35 @@ DASH_HTML = r'''
       <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
       <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button><button onclick="inferCalibrationGpsFromMap()">Infer GPS from Selected Map Point</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section><section id="tab-messages" class="hidden"><p class="muted">Field-test message board. Use this for bug reports, feature requests, notes, or test feedback.</p><div class="card"><label>Name</label><input id="msgName" placeholder="Your name" /><label>Subject</label><input id="msgSubject" placeholder="Bug, idea, question..." /><label>Body</label><textarea id="msgBody" placeholder="What happened? What should change?" style="width:100%;min-height:120px;background:#0d1520;color:#f7fbff;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:10px;"></textarea><div class="row"><button class="primary" onclick="postMessageBoard()">Post Message</button><button onclick="loadMessageBoard()">Refresh</button></div></div><div class="list" id="messageList"></div></section>
       <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button onclick="loadGates()">WRSTOPS</button><button class="primary" onclick="startAddPoi()">+ POI</button><button class="primary" onclick="startAddGate()">+ Gate</button></div><br /><div id="dataList" class="list"></div></section>
+      <section id="tab-access" class="hidden">
+        <p class="muted">Draw fences/barricades, flood-fill zones (GA / VIP / Staff), then connect WRSTOPS portals with access rules.</p>
+        <div class="row">
+          <button data-access-tool="select" class="primary" onclick="setAccessTool('select')">Select</button>
+          <button data-access-tool="drawBarrier" onclick="setAccessTool('drawBarrier')">Draw Barrier</button>
+          <button data-access-tool="fillZone" onclick="setAccessTool('fillZone')">Fill Zone</button>
+          <button data-access-tool="linkPortal" onclick="setAccessTool('linkPortal')">Portal Rules</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <div><label>Barrier name</label><input id="accessBarrierName" placeholder="North fence" /></div>
+          <div><label>Barrier type</label><select id="accessBarrierType"><option value="fence">Fence</option><option value="barricade">Barricade</option><option value="wall">Wall</option><option value="rope">Rope</option></select></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="finishDraftBarrier()">Finish Barrier</button>
+          <button onclick="cancelDraftBarrier()">Cancel Draw</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <div><label>Zone name</label><input id="accessZoneName" placeholder="VIP Lawn" /></div>
+          <div><label>Fill as</label><select id="accessZoneClass"><option value="ga">GA</option><option value="vip">VIP</option><option value="staff">Staff</option><option value="backstage">Backstage</option><option value="vendor">Vendor</option></select></div>
+        </div>
+        <p class="small">Fill tool: close an area with barriers first, then click inside it on the map.</p>
+        <h3 style="margin:14px 0 6px">Barriers</h3>
+        <div class="list" id="accessBarrierList"></div>
+        <h3 style="margin:14px 0 6px">Zones</h3>
+        <div class="list" id="accessZoneList"></div>
+        <h3 style="margin:14px 0 6px">Portals / Gates</h3>
+        <div class="list" id="accessPortalList"></div>
+        <div id="accessPortalEditor"></div>
+      </section>
     </div></div>
   </div>
 </div>
@@ -1101,7 +1136,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',data:'POIs / Survey / WRSTOPS',messages:'Messages'}[tab]||tab; clearOverlay(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',data:'POIs / Survey / WRSTOPS',messages:'Messages'}[tab]||tab; clearOverlay(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId)){el.classList.add('selected'); if(dashSearchMatches.length)el.classList.add('searchHit');} el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} document.getElementById('mapWrap').appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -1295,6 +1330,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
+<script src="/static/dash/access-control.js"></script>
 </body>
 </html>
 '''
