@@ -3,6 +3,8 @@
   const SVG_H = 562.5;
   const GRID_W = 400;
   const GRID_H = 225;
+  const PORTAL_SNAP_DIST = 0.024;
+  const PORTAL_SNAP_RADIUS = 0.022;
 
   const ZONE_COLORS = {
     ga: "rgba(76,175,80,0.38)",
@@ -138,6 +140,65 @@
     setFillColorInputs(defaults.color, defaults.opacity);
   }
 
+  function gateFenceHeading(gate) {
+    return Number(gate?.fence_heading_deg ?? gate?.fenceHeadingDeg ?? 0) % 360;
+  }
+
+  function headingUnitRad(deg) {
+    const rad = (deg * Math.PI) / 180;
+    return { ux: Math.cos(rad), uy: Math.sin(rad) };
+  }
+
+  function getPortalSnapPair(gate) {
+    const cx = gate?.map_x ?? gate?.mapX;
+    const cy = gate?.map_y ?? gate?.mapY;
+    if (cx == null || cy == null) return null;
+    const heading = gateFenceHeading(gate);
+    const { ux, uy } = headingUnitRad(heading);
+    return {
+      gateId: gate.id,
+      gateName: gate.name || "Portal",
+      center: { x: cx, y: cy },
+      heading,
+      a: { x: cx - ux * PORTAL_SNAP_DIST, y: cy - uy * PORTAL_SNAP_DIST, side: "a" },
+      b: { x: cx + ux * PORTAL_SNAP_DIST, y: cy + uy * PORTAL_SNAP_DIST, side: "b" },
+    };
+  }
+
+  function snapAccessPoint(p, gates) {
+    let best = null;
+    let bestDist = PORTAL_SNAP_RADIUS;
+    (gates || []).forEach((gate) => {
+      const pair = getPortalSnapPair(gate);
+      if (!pair) return;
+      [pair.a, pair.b].forEach((pt) => {
+        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            x: pt.x,
+            y: pt.y,
+            snapped: true,
+            gateId: gate.id,
+            gateName: pair.gateName,
+            side: pt.side,
+          };
+        }
+      });
+    });
+    return best || { x: p.x, y: p.y, snapped: false };
+  }
+
+  function addDraftBarrierPoint(p, snapInfo) {
+    draftBarrierPoints.push({ x: p.x, y: p.y });
+    drawAccessLayers();
+    if (snapInfo?.snapped) {
+      setStatus(`Snapped to ${snapInfo.gateName} side ${snapInfo.side.toUpperCase()} (point ${draftBarrierPoints.length}).`);
+    } else {
+      setStatus(`Barrier point ${draftBarrierPoints.length}. Click Finish Barrier when done.`);
+    }
+  }
+
   function ensureZoneSvg() {
     const wrap = document.getElementById("mapWrap");
     if (!wrap) return null;
@@ -168,6 +229,53 @@
     return { x: gx / (GRID_W - 1), y: gy / (GRID_H - 1) };
   }
 
+  function drawGridLineClear(grid, x0, y0, x1, y1, clear) {
+    let dx = Math.abs(x1 - x0);
+    let dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    while (true) {
+      clear(x0, y0);
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) clear(x0 + ox, y0 + oy);
+      }
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) {
+        err -= dy;
+        x0 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+  }
+
+  function carveGateOpening(grid, gate) {
+    const pair = getPortalSnapPair(gate);
+    if (!pair) return;
+    const clear = (gx, gy) => {
+      if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 0;
+    };
+    const a = gridFromNorm(pair.a.x, pair.a.y);
+    const b = gridFromNorm(pair.b.x, pair.b.y);
+    drawGridLineClear(grid, a.gx, a.gy, b.gx, b.gy, clear);
+    const c = gridFromNorm(pair.center.x, pair.center.y);
+    const { ux, uy } = headingUnitRad(pair.heading);
+    const px = -uy;
+    const py = ux;
+    for (let t = -4; t <= 4; t++) {
+      const gx = Math.round(c.gx + px * t);
+      const gy = Math.round(c.gy + py * t);
+      clear(gx, gy);
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) clear(gx + ox, gy + oy);
+      }
+    }
+  }
+
   function rasterizeWalls(grid, gates) {
     const mark = (gx, gy) => {
       if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 1;
@@ -182,19 +290,7 @@
       }
     });
 
-    (gates || []).forEach((gate) => {
-      const gx = gate.map_x ?? gate.mapX;
-      const gy = gate.map_y ?? gate.mapY;
-      if (gx == null || gy == null) return;
-      const c = gridFromNorm(gx, gy);
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (c.gx + dx >= 0 && c.gx + dx < GRID_W && c.gy + dy >= 0 && c.gy + dy < GRID_H) {
-            grid[c.gy + dy][c.gx + dx] = 0;
-          }
-        }
-      }
-    });
+    (gates || []).forEach((gate) => carveGateOpening(grid, gate));
   }
 
   function drawGridLine(grid, x0, y0, x1, y1, mark) {
@@ -391,6 +487,64 @@
       draft.setAttribute("stroke-dasharray", "8 6");
       svg.appendChild(draft);
     }
+
+    drawPortalSnapLayers(svg);
+  }
+
+  function drawPortalSnapLayers(svg) {
+    (getDashGates() || []).forEach((gate) => {
+      const pair = getPortalSnapPair(gate);
+      if (!pair) return;
+
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(pair.a.x * SVG_W));
+      line.setAttribute("y1", String(pair.a.y * SVG_H));
+      line.setAttribute("x2", String(pair.b.x * SVG_W));
+      line.setAttribute("y2", String(pair.b.y * SVG_H));
+      line.setAttribute("stroke", "#64b5f6");
+      line.setAttribute("stroke-width", "3");
+      line.setAttribute("stroke-dasharray", "7 5");
+      line.setAttribute("opacity", "0.85");
+      line.style.pointerEvents = "none";
+      svg.appendChild(line);
+
+      [pair.a, pair.b].forEach((pt) => {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", String(pt.x * SVG_W));
+        circle.setAttribute("cy", String(pt.y * SVG_H));
+        circle.setAttribute("r", "8");
+        circle.setAttribute("fill", "#64b5f6");
+        circle.setAttribute("stroke", "#ffffff");
+        circle.setAttribute("stroke-width", "2");
+        circle.setAttribute("data-portal-snap", "1");
+        circle.setAttribute("title", `${pair.gateName} snap ${pt.side.toUpperCase()}`);
+        if (accessTool === "drawBarrier") {
+          circle.style.pointerEvents = "auto";
+          circle.style.cursor = "crosshair";
+          circle.onclick = (ev) => {
+            ev.stopPropagation();
+            addDraftBarrierPoint(
+              { x: pt.x, y: pt.y },
+              { snapped: true, gateName: pair.gateName, side: pt.side }
+            );
+          };
+        } else {
+          circle.style.pointerEvents = "none";
+        }
+        svg.appendChild(circle);
+
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", String(pt.x * SVG_W));
+        label.setAttribute("y", String(pt.y * SVG_H - 12));
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("fill", "#b3e5fc");
+        label.setAttribute("font-size", "11");
+        label.setAttribute("font-weight", "700");
+        label.textContent = pt.side.toUpperCase();
+        label.style.pointerEvents = "none";
+        svg.appendChild(label);
+      });
+    });
   }
 
   function clearAccessOverlay() {
@@ -415,8 +569,8 @@
     });
     const hints = {
       select: "Select barriers, zones, or portals on the map or in the list.",
-      drawBarrier: "Click the map to add barrier points. Finish when the outline is complete.",
-      fillZone: "Click inside a closed area, then save the filled zone.",
+      drawBarrier: "Click the map or blue portal snap points (A/B) to trace your fence. Portals leave an opening for zone fill.",
+      fillZone: "Click inside a closed area (barriers + portal openings). Pick a color first.",
       linkPortal: "Select a portal/gate, then set zone access rules in the panel.",
     };
     setStatus(hints[tool] || "Access control ready.");
@@ -536,10 +690,17 @@
 
     const classes = ["ga", "vip", "staff", "backstage", "vendor"];
     const allowed = new Set(gate.allowed_classes || []);
+    const fenceHeading = Math.round(gateFenceHeading(gate));
 
     editor.innerHTML = `
       <div class="card selected">
         <h3>${escapeHtml(gate.name)} portal rules</h3>
+        <label>Fence line heading (snap points A ↔ B)</label>
+        <input id="portalFenceHeading" type="range" min="0" max="359" value="${fenceHeading}" />
+        <div class="small" id="portalFenceHeadingLabel">${fenceHeading}° — rotate until blue snap points sit on your fence line</div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="savePortalFenceHeading()">Save Portal Orientation</button>
+        </div>
         <label>Zone A (from / outside)</label>
         <select id="portalZoneA">${zoneOptions(true)}</select>
         <label>Zone B (to / inside)</label>
@@ -571,6 +732,13 @@
     document.getElementById("portalZoneB").value = gate.zone_b_id || "";
     document.getElementById("portalBarrier").value = gate.barrier_id || "";
     document.getElementById("portalDirection").value = gate.direction || "bidirectional";
+    document.getElementById("portalFenceHeading")?.addEventListener("input", () => {
+      const label = document.getElementById("portalFenceHeadingLabel");
+      const val = document.getElementById("portalFenceHeading")?.value || fenceHeading;
+      if (label) label.textContent = `${val}° — rotate until blue snap points sit on your fence line`;
+      gate.fence_heading_deg = Number(val);
+      drawAccessLayers();
+    });
   }
 
   function selectBarrier(id) {
@@ -718,6 +886,23 @@
     setStatus(`Saved default fill color for ${zoneLabel(cls)}.`);
   };
 
+  window.savePortalFenceHeading = async function () {
+    if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
+    const heading = parseInt(document.getElementById("portalFenceHeading")?.value || "0", 10);
+    const updated = await api(`/events/${getDashEvent().id}/wrstops-gates/${selectedId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        fence_heading_deg: heading,
+        updated_by: "dash_access",
+      }),
+    });
+    const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
+    if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus(`Saved portal fence heading (${heading}°). Snap points updated.`);
+  };
+
   window.savePortalAccess = async function () {
     if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
     const allowed = [...document.querySelectorAll(".portalClass:checked")].map((el) => el.value);
@@ -775,9 +960,8 @@
     if (typeof currentTab === "undefined" || currentTab !== "access") return false;
 
     if (accessTool === "drawBarrier") {
-      draftBarrierPoints.push({ x: p.x, y: p.y });
-      drawAccessLayers();
-      setStatus(`Barrier point ${draftBarrierPoints.length}. Click Finish Barrier when done.`);
+      const snapped = snapAccessPoint(p, getDashGates());
+      addDraftBarrierPoint({ x: snapped.x, y: snapped.y }, snapped);
       return true;
     }
 

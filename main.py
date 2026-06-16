@@ -58,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.4.2")
+app = FastAPI(title="Beacon Server", version="3.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -150,6 +150,7 @@ class WrstopsGateCreate(BaseModel):
     connection_status: Optional[str] = Field(default="ONLINE", max_length=40)
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default="NORMAL", max_length=40)
+    fence_heading_deg: Optional[float] = Field(default=0.0, ge=0.0, lt=360.0)
     updated_by: Optional[str] = "android_wrstops"
 
 
@@ -165,6 +166,7 @@ class WrstopsGateUpdate(BaseModel):
     connection_status: Optional[str] = Field(default=None, max_length=40)
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default=None, max_length=40)
+    fence_heading_deg: Optional[float] = Field(default=None, ge=0.0, lt=360.0)
     updated_by: Optional[str] = "android_wrstops"
 
 
@@ -326,6 +328,15 @@ def beacon_row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def normalize_fence_heading(value: Optional[float]) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value) % 360.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def normalize_gate_device_type(value: Optional[str]) -> str:
     raw = (value or "portal").strip().lower().replace(" ", "_").replace("-", "_")
     aliases = {
@@ -369,6 +380,12 @@ def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
+        "fence_heading_deg": normalize_fence_heading(
+            row["fence_heading_deg"] if "fence_heading_deg" in row.keys() else 0.0
+        ),
+        "fenceHeadingDeg": normalize_fence_heading(
+            row["fence_heading_deg"] if "fence_heading_deg" in row.keys() else 0.0
+        ),
         **enrich_wrstops_gate_dict(row),
     }
 
@@ -593,6 +610,8 @@ def init_db():
             conn.execute("ALTER TABLE wrstops_gates ADD COLUMN accuracy_meters REAL")
         if "device_type" not in existing_gate_columns:
             conn.execute("ALTER TABLE wrstops_gates ADD COLUMN device_type TEXT NOT NULL DEFAULT 'portal'")
+        if "fence_heading_deg" not in existing_gate_columns:
+            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN fence_heading_deg REAL NOT NULL DEFAULT 0")
 
 
         conn.execute(
@@ -968,7 +987,7 @@ def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.4.2",
+        "version": "3.5.0",
         "docs": "/docs",
     }
 
@@ -1121,7 +1140,7 @@ DASH_HTML = r'''
           <div id="accessZonePresets" class="row" style="gap:6px;flex:2"></div>
           <button onclick="saveZoneClassColorDefault()">Save Color For Class</button>
         </div>
-        <p class="small">Fill tool: close an area with barriers first, pick a color, then click inside it on the map.</p>
+        <p class="small">Draw barriers along fence lines — blue snap points appear on each side of every portal/gate. Snap to them so the portal opening closes the zone. Rotate fence heading in Portal Rules if snap points need turning.</p>
         <div id="accessZoneEditor"></div>
         <h3 style="margin:14px 0 6px">Barriers</h3>
         <div class="list" id="accessBarrierList"></div>
@@ -1186,10 +1205,10 @@ function selectGate(id){setSelected('gate',id); setTab('data', false); dataMode=
 async function loadGates(){dataMode='gates'; gates=await api(`/events/${currentEvent.id}/wrstops-gates`); renderGates(); drawBase();}
 function renderGates(){const list=document.getElementById('dataList'); const addCard=(selectedKind==='newGate')?newGateEditor():''; const gateCards=gates.map(g=>{const sel=selectedKind==='gate'&&selectedId===g.id; return `<div class="card ${sel?'selected':''}" id="gate-${g.id}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${gateDeviceLabel(g)} • ${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}${g.latitude!=null&&g.longitude!=null?'<br>GPS '+g.latitude+', '+g.longitude:''}</p>${sel?gateEditor(g):''}</div>`}).join(''); list.innerHTML=addCard+(gateCards||'<p class="muted">No gates.</p>');}
 function startAddGate(){setSelected('newGate','new'); setTab('data',false); dataMode='gates'; renderGates(); drawBase(); setStatus('Create a new WRSTOPS gate. Enter details or click Place on Map.');}
-function newGateEditor(){return `<div class="card selected"><h3>Add WRSTOPS Gate</h3><p class="muted">Create a new gate for ${escapeHtml(currentEvent.name)}. Use Place on Map, then Create Gate.</p><label>Name</label><input id="newGateName" value="Gate ${gates.length+1}"><label>Device Type</label><select id="newGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions('portal')}</select><div class="row"><div><label>Map X</label><input id="newGateMapX" value="0.5000"></div><div><label>Map Y</label><input id="newGateMapY" value="0.5000"></div></div><div class="row"><div><label>Latitude</label><input id="newGateLat" placeholder="optional"></div><div><label>Longitude</label><input id="newGateLng" placeholder="optional"></div></div><div class="row"><div><label>Scan Count</label><input id="newGateScans" value="0"></div><div><label>IP Address</label><input id="newGateIp" placeholder="optional"></div></div><div class="row"><div><label>Status</label><select id="newGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE">ONLINE</option><option value="OFFLINE">OFFLINE</option></select></div><div><label>Override</label><select id="newGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL">NORMAL</option><option value="OFFLINE">OFFLINE</option></select></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); createGate()">Create Gate</button><button onclick="event.stopPropagation(); mapClickMode='newGate'; setStatus('Click the map to place the new WRSTOPS gate.')">Place on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('newGateLat','newGateLng','newGateMapX','newGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('newGateMapX','newGateMapY','newGateLat','newGateLng')">Infer GPS from Map</button><button onclick="event.stopPropagation(); selectedKind=null; selectedId=null; renderGates(); drawBase(); setStatus('Cancelled new gate.')">Cancel</button></div></div>`}
-async function createGate(){const lat=document.getElementById('newGateLat').value.trim(), lng=document.getElementById('newGateLng').value.trim(); const payload={name:document.getElementById('newGateName').value||'Gate',device_type:document.getElementById('newGateDeviceType').value,map_x:parseFloat(document.getElementById('newGateMapX').value),map_y:parseFloat(document.getElementById('newGateMapY').value),scan_count:parseInt(document.getElementById('newGateScans').value||'0',10),connection_status:document.getElementById('newGateStatus').value,override_status:document.getElementById('newGateOverride').value,ip_address:document.getElementById('newGateIp').value||null,updated_by:'dash_gate_creator'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} if(!Number.isFinite(payload.map_x)||!Number.isFinite(payload.map_y)){setStatus('Enter valid map X/Y.'); return;} const created=await api(`/events/${currentEvent.id}/wrstops-gates`,{method:'POST',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',created.id); renderGates(); drawBase(); setStatus('Created WRSTOPS gate.');}
-function gateEditor(g){return `<label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><label>Device Type</label><select id="editGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions(g.device_type||g.deviceType||'portal')}</select><div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div><div class="row"><div><label>Status</label><select id="editGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Gate</button><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move selected WRSTOPS gate.')">Move on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('editGateLat','editGateLng','editGateMapX','editGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('editGateMapX','editGateMapY','editGateLat','editGateLng')">Infer GPS from Map</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div>`}
-async function saveGate(id){const lat=document.getElementById('editGateLat').value.trim(), lng=document.getElementById('editGateLng').value.trim(); const payload={name:document.getElementById('editGateName').value,device_type:document.getElementById('editGateDeviceType').value,map_x:parseFloat(document.getElementById('editGateMapX').value),map_y:parseFloat(document.getElementById('editGateMapY').value),scan_count:parseInt(document.getElementById('editGateScans').value||'0',10),connection_status:document.getElementById('editGateStatus').value,override_status:document.getElementById('editGateOverride').value,ip_address:document.getElementById('editGateIp').value,updated_by:'dash_gate_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} await api(`/events/${currentEvent.id}/wrstops-gates/${id}`,{method:'PUT',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',id); renderGates(); drawBase(); setStatus('Saved WRSTOPS gate.');}
+function newGateEditor(){return `<div class="card selected"><h3>Add WRSTOPS Gate</h3><p class="muted">Create a new gate for ${escapeHtml(currentEvent.name)}. Use Place on Map, then Create Gate.</p><label>Name</label><input id="newGateName" value="Gate ${gates.length+1}"><label>Device Type</label><select id="newGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions('portal')}</select><div class="row"><div><label>Map X</label><input id="newGateMapX" value="0.5000"></div><div><label>Map Y</label><input id="newGateMapY" value="0.5000"></div></div><div class="row"><div><label>Latitude</label><input id="newGateLat" placeholder="optional"></div><div><label>Longitude</label><input id="newGateLng" placeholder="optional"></div></div><div class="row"><div><label>Scan Count</label><input id="newGateScans" value="0"></div><div><label>IP Address</label><input id="newGateIp" placeholder="optional"></div></div><div class="row"><div><label>Status</label><select id="newGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE">ONLINE</option><option value="OFFLINE">OFFLINE</option></select></div><div><label>Override</label><select id="newGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL">NORMAL</option><option value="OFFLINE">OFFLINE</option></select></div></div><label>Fence heading (°)</label><input id="newGateFenceHeading" type="range" min="0" max="359" value="0" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation()"><div class="small">Snap points sit on this fence line through the portal (0° = horizontal).</div><div class="row"><button class="primary" onclick="event.stopPropagation(); createGate()">Create Gate</button><button onclick="event.stopPropagation(); mapClickMode='newGate'; setStatus('Click the map to place the new WRSTOPS gate.')">Place on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('newGateLat','newGateLng','newGateMapX','newGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('newGateMapX','newGateMapY','newGateLat','newGateLng')">Infer GPS from Map</button><button onclick="event.stopPropagation(); selectedKind=null; selectedId=null; renderGates(); drawBase(); setStatus('Cancelled new gate.')">Cancel</button></div></div>`}
+async function createGate(){const lat=document.getElementById('newGateLat').value.trim(), lng=document.getElementById('newGateLng').value.trim(); const payload={name:document.getElementById('newGateName').value||'Gate',device_type:document.getElementById('newGateDeviceType').value,map_x:parseFloat(document.getElementById('newGateMapX').value),map_y:parseFloat(document.getElementById('newGateMapY').value),scan_count:parseInt(document.getElementById('newGateScans').value||'0',10),connection_status:document.getElementById('newGateStatus').value,override_status:document.getElementById('newGateOverride').value,ip_address:document.getElementById('newGateIp').value||null,fence_heading_deg:parseInt(document.getElementById('newGateFenceHeading').value||'0',10),updated_by:'dash_gate_creator'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} if(!Number.isFinite(payload.map_x)||!Number.isFinite(payload.map_y)){setStatus('Enter valid map X/Y.'); return;} const created=await api(`/events/${currentEvent.id}/wrstops-gates`,{method:'POST',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',created.id); renderGates(); drawBase(); setStatus('Created WRSTOPS gate.');}
+function gateEditor(g){return `<label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><label>Device Type</label><select id="editGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions(g.device_type||g.deviceType||'portal')}</select><div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div><div class="row"><div><label>Status</label><select id="editGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><label>Fence heading (°)</label><input id="editGateFenceHeading" type="range" min="0" max="359" value="${Math.round(g.fence_heading_deg??g.fenceHeadingDeg??0)}" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation()"><div class="small">Rotate so barrier snap points align with your fence line.</div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Gate</button><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move selected WRSTOPS gate.')">Move on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('editGateLat','editGateLng','editGateMapX','editGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('editGateMapX','editGateMapY','editGateLat','editGateLng')">Infer GPS from Map</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div>`}
+async function saveGate(id){const lat=document.getElementById('editGateLat').value.trim(), lng=document.getElementById('editGateLng').value.trim(); const payload={name:document.getElementById('editGateName').value,device_type:document.getElementById('editGateDeviceType').value,map_x:parseFloat(document.getElementById('editGateMapX').value),map_y:parseFloat(document.getElementById('editGateMapY').value),scan_count:parseInt(document.getElementById('editGateScans').value||'0',10),connection_status:document.getElementById('editGateStatus').value,override_status:document.getElementById('editGateOverride').value,ip_address:document.getElementById('editGateIp').value,updated_by:'dash_gate_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} payload.fence_heading_deg=parseInt(document.getElementById('editGateFenceHeading').value||'0',10); await api(`/events/${currentEvent.id}/wrstops-gates/${id}`,{method:'PUT',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',id); renderGates(); drawBase(); setStatus('Saved WRSTOPS gate.');}
 async function deleteGate(id){if(!confirm('Delete this WRSTOPS gate?'))return; await api(`/events/${currentEvent.id}/wrstops-gates/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadGates(); setStatus('Deleted WRSTOPS gate.');}
 function selectAnchor(id){setSelected('anchor',id); setTab('calibration'); loadAnchors().then(()=>setStatus('Selected calibration anchor.'));}
 async function loadAnchors(){mapAnchors=await api(`/events/${currentEvent.id}/calibration-anchors`); document.getElementById('anchorList').innerHTML=mapAnchors.map(a=>`<div class="card ${selectedKind==='anchor'&&selectedId===a.id?'selected':''}" onclick="selectAnchor('${a.id}')"><h3>Anchor</h3><p>map ${n4(a.map_x)}, ${n4(a.map_y)}<br>${a.latitude}, ${a.longitude}</p><button class="danger" onclick="event.stopPropagation(); deleteAnchor('${a.id}')">Delete</button></div>`).join('')||'<p class="muted">No anchors.</p>'; drawBase();}
@@ -1341,7 +1360,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.4.2"></script>
+<script src="/static/dash/access-control.js?v=3.5.0"></script>
 </body>
 </html>
 '''
@@ -1908,10 +1927,10 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
             """
             INSERT INTO wrstops_gates (
                 id, event_id, name, device_type, map_x, map_y, latitude, longitude, accuracy_meters, scan_count,
-                connection_status, ip_address, override_status,
+                connection_status, ip_address, override_status, fence_heading_deg,
                 created_at, updated_at, updated_by
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gate_id,
@@ -1927,6 +1946,7 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
                 connection_status,
                 payload.ip_address,
                 override_status,
+                normalize_fence_heading(payload.fence_heading_deg),
                 timestamp,
                 timestamp,
                 payload.updated_by,
@@ -1976,6 +1996,13 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
             if payload.override_status is not None
             else existing["override_status"]
         )
+        fence_heading_deg = (
+            normalize_fence_heading(payload.fence_heading_deg)
+            if payload.fence_heading_deg is not None
+            else normalize_fence_heading(
+                existing["fence_heading_deg"] if "fence_heading_deg" in existing.keys() else 0.0
+            )
+        )
 
         conn.execute(
             """
@@ -1992,6 +2019,7 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 connection_status = ?,
                 ip_address = ?,
                 override_status = ?,
+                fence_heading_deg = ?,
                 updated_at = ?,
                 updated_by = ?
             WHERE id = ? AND event_id = ?
@@ -2008,6 +2036,7 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 connection_status or "ONLINE",
                 ip_address,
                 override_status or "NORMAL",
+                fence_heading_deg,
                 now_iso(),
                 payload.updated_by,
                 gate_id,
