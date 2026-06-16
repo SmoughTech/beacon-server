@@ -45,6 +45,7 @@ class AccessZoneCreate(BaseModel):
     name: str = Field(default="Zone", min_length=1, max_length=120)
     zone_class: str = Field(default="ga", max_length=40)
     polygon: List[MapPoint] = Field(min_length=3)
+    fill_color: Optional[str] = Field(default=None, max_length=80)
     updated_by: Optional[str] = "dash_access"
 
 
@@ -52,6 +53,7 @@ class AccessZoneUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     zone_class: Optional[str] = Field(default=None, max_length=40)
     polygon: Optional[List[MapPoint]] = Field(default=None, min_length=3)
+    fill_color: Optional[str] = Field(default=None, max_length=80)
     updated_by: Optional[str] = "dash_access"
 
 
@@ -83,6 +85,20 @@ def normalize_direction(value: Optional[str]) -> str:
     if raw not in {"bidirectional", "a_to_b", "b_to_a"}:
         raw = "bidirectional"
     return raw
+
+
+def resolve_fill_color(zone_class: str, requested: Optional[str]) -> str:
+    if requested:
+        cleaned = requested.strip()
+        if cleaned:
+            lowered = cleaned.lower()
+            if lowered.startswith("#") and len(cleaned) in {4, 7, 9}:
+                return cleaned
+            if lowered.startswith("rgba(") and lowered.endswith(")"):
+                return cleaned
+            if lowered.startswith("rgb(") and lowered.endswith(")"):
+                return cleaned
+    return ZONE_COLORS.get(normalize_zone_class(zone_class), ZONE_COLORS["ga"])
 
 
 def _points_to_json(points: List[MapPoint]) -> str:
@@ -337,7 +353,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     payload.name.strip() or "Zone",
                     zone_class,
                     _points_to_json(payload.polygon),
-                    ZONE_COLORS.get(zone_class, ZONE_COLORS["ga"]),
+                    resolve_fill_color(zone_class, payload.fill_color),
                     timestamp,
                     timestamp,
                     payload.updated_by,
@@ -371,6 +387,12 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 if payload.polygon is not None
                 else existing["polygon_json"]
             )
+            if payload.fill_color is not None:
+                fill_color = resolve_fill_color(zone_class, payload.fill_color)
+            elif payload.zone_class is not None:
+                fill_color = resolve_fill_color(zone_class, None)
+            else:
+                fill_color = existing["fill_color"] or resolve_fill_color(zone_class, None)
             timestamp = now_iso()
             conn.execute(
                 """
@@ -383,7 +405,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     name,
                     zone_class,
                     polygon_json,
-                    ZONE_COLORS.get(zone_class, ZONE_COLORS["ga"]),
+                    fill_color,
                     timestamp,
                     payload.updated_by,
                     zone_id,

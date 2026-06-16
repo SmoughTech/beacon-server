@@ -12,6 +12,17 @@
     vendor: "rgba(255,152,0,0.38)",
   };
 
+  const ZONE_PRESETS = [
+    { name: "GA Green", color: "#4caf50", opacity: 38 },
+    { name: "VIP Gold", color: "#ffc107", opacity: 40 },
+    { name: "Staff Blue", color: "#42a5f5", opacity: 40 },
+    { name: "Backstage Purple", color: "#ab47bc", opacity: 40 },
+    { name: "Vendor Orange", color: "#ff9800", opacity: 38 },
+    { name: "Red Alert", color: "#ef5350", opacity: 42 },
+    { name: "Teal", color: "#26a69a", opacity: 40 },
+    { name: "Pink", color: "#ec407a", opacity: 40 },
+  ];
+
   let accessBarriers = [];
   let accessZones = [];
   let accessTool = "select";
@@ -22,6 +33,109 @@
 
   function zoneLabel(cls) {
     return ({ ga: "GA", vip: "VIP", staff: "Staff", backstage: "Backstage", vendor: "Vendor" }[cls] || cls);
+  }
+
+  function hexToRgba(hex, alphaPct) {
+    const raw = (hex || "#4caf50").replace("#", "");
+    const full =
+      raw.length === 3
+        ? raw
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : raw.slice(0, 6);
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    const a = Math.max(0.1, Math.min(0.9, (alphaPct ?? 38) / 100));
+    return `rgba(${r},${g},${b},${a.toFixed(2)})`;
+  }
+
+  function parseRgbaColor(value) {
+    const fallback = { color: "#4caf50", opacity: 38 };
+    if (!value) return fallback;
+    const rgba = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+    if (!rgba) {
+      if (value.startsWith("#")) return { color: value.slice(0, 7), opacity: 38 };
+      return fallback;
+    }
+    const r = Number(rgba[1]);
+    const g = Number(rgba[2]);
+    const b = Number(rgba[3]);
+    const a = rgba[4] != null ? Number(rgba[4]) : 1;
+    const toHex = (n) => n.toString(16).padStart(2, "0");
+    return {
+      color: `#${toHex(r)}${toHex(g)}${toHex(b)}`,
+      opacity: Math.round(Math.max(10, Math.min(90, a * 100))),
+    };
+  }
+
+  function classColorStorageKey(cls) {
+    return `beacon_zone_color_${cls || "ga"}`;
+  }
+
+  function getStoredClassColor(cls) {
+    try {
+      const raw = localStorage.getItem(classColorStorageKey(cls));
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getDefaultClassColor(cls) {
+    const stored = getStoredClassColor(cls);
+    if (stored?.color) return stored;
+    return parseRgbaColor(ZONE_COLORS[cls] || ZONE_COLORS.ga);
+  }
+
+  function getSelectedFillColor() {
+    const color = document.getElementById("accessZoneColor")?.value || "#4caf50";
+    const opacity = Number(document.getElementById("accessZoneOpacity")?.value || 38);
+    return hexToRgba(color, opacity);
+  }
+
+  function setFillColorInputs(color, opacity) {
+    const colorEl = document.getElementById("accessZoneColor");
+    const opacityEl = document.getElementById("accessZoneOpacity");
+    if (colorEl && color) colorEl.value = color;
+    if (opacityEl && opacity != null) opacityEl.value = String(opacity);
+    syncFillColorPreview();
+  }
+
+  function syncFillColorPreview() {
+    const preview = document.getElementById("accessZoneColorPreview");
+    const label = document.getElementById("accessZoneOpacityLabel");
+    const fill = getSelectedFillColor();
+    if (preview) preview.style.background = fill;
+    if (label) label.textContent = `${document.getElementById("accessZoneOpacity")?.value || 38}%`;
+    document.querySelectorAll("[data-zone-preset]").forEach((btn) => {
+      const match =
+        btn.dataset.zoneColor === (document.getElementById("accessZoneColor")?.value || "") &&
+        Number(btn.dataset.zoneOpacity) === Number(document.getElementById("accessZoneOpacity")?.value || 0);
+      btn.classList.toggle("active", match);
+    });
+  }
+
+  function renderZonePresets() {
+    const host = document.getElementById("accessZonePresets");
+    if (!host) return;
+    host.innerHTML = ZONE_PRESETS.map(
+      (preset) =>
+        `<button type="button" class="zoneColorSwatch" data-zone-preset="1" data-zone-color="${preset.color}" data-zone-opacity="${preset.opacity}" title="${escapeHtml(preset.name)}" style="background:${hexToRgba(preset.color, preset.opacity)}"></button>`
+    ).join("");
+    host.querySelectorAll("[data-zone-preset]").forEach((btn) => {
+      btn.onclick = () => {
+        setFillColorInputs(btn.dataset.zoneColor, Number(btn.dataset.zoneOpacity));
+      };
+    });
+    syncFillColorPreview();
+  }
+
+  function applyClassDefaultColor() {
+    const cls = document.getElementById("accessZoneClass")?.value || fillZoneClass || "ga";
+    const defaults = getDefaultClassColor(cls);
+    setFillColorInputs(defaults.color, defaults.opacity);
   }
 
   function ensureZoneSvg() {
@@ -268,10 +382,10 @@
 
     zoneList.innerHTML =
       accessZones
-        .map(
-          (z) =>
-            `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} points</p><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`
-        )
+        .map((z) => {
+          const swatch = z.fill_color || ZONE_COLORS[z.zone_class] || ZONE_COLORS.ga;
+          return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} points</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
+        })
         .join("") || '<p class="muted">No zones yet.</p>';
 
     portalList.innerHTML =
@@ -284,7 +398,55 @@
         })
         .join("") || '<p class="muted">Add WRSTOPS gates first (+ Gate on POIs tab).</p>';
 
+    renderZoneEditor();
     renderPortalEditor();
+  }
+
+  function renderZoneEditor() {
+    const editor = document.getElementById("accessZoneEditor");
+    if (!editor) return;
+    if (!selectedZoneId) {
+      editor.innerHTML = "";
+      return;
+    }
+    const zone = accessZones.find((z) => z.id === selectedZoneId);
+    if (!zone) {
+      editor.innerHTML = "";
+      return;
+    }
+
+    const parsed = parseRgbaColor(zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga);
+    editor.innerHTML = `
+      <div class="card selected" style="margin-top:10px">
+        <h3>Edit "${escapeHtml(zone.name)}"</h3>
+        <div class="row">
+          <div><label>Name</label><input id="editZoneName" value="${escapeHtml(zone.name)}" /></div>
+          <div><label>Class</label><select id="editZoneClass">${["ga", "vip", "staff", "backstage", "vendor"]
+            .map((c) => `<option value="${c}" ${zone.zone_class === c ? "selected" : ""}>${zoneLabel(c)}</option>`)
+            .join("")}</select></div>
+        </div>
+        <div class="row" style="margin-top:8px;align-items:end">
+          <div><label>Fill color</label><input id="editZoneColor" type="color" value="${parsed.color}" style="width:100%;height:42px;padding:4px" /></div>
+          <div><label>Opacity</label><input id="editZoneOpacity" type="range" min="10" max="90" value="${parsed.opacity}" style="padding:0" /><div class="small" id="editZoneOpacityLabel">${parsed.opacity}%</div></div>
+          <div><label>Preview</label><div id="editZoneColorPreview" class="zoneColorPreview" style="background:${zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga}"></div></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" onclick="saveSelectedZoneColor()">Save Zone Color</button>
+        </div>
+      </div>`;
+
+    const syncEditPreview = () => {
+      const fill = hexToRgba(
+        document.getElementById("editZoneColor")?.value || parsed.color,
+        Number(document.getElementById("editZoneOpacity")?.value || parsed.opacity)
+      );
+      const preview = document.getElementById("editZoneColorPreview");
+      const label = document.getElementById("editZoneOpacityLabel");
+      if (preview) preview.style.background = fill;
+      if (label) label.textContent = `${document.getElementById("editZoneOpacity")?.value || parsed.opacity}%`;
+    };
+    document.getElementById("editZoneColor")?.addEventListener("input", syncEditPreview);
+    document.getElementById("editZoneOpacity")?.addEventListener("input", syncEditPreview);
   }
 
   function renderPortalEditor() {
@@ -361,6 +523,16 @@
   function selectZone(id) {
     selectedZoneId = id;
     selectedBarrierId = null;
+    const zone = accessZones.find((z) => z.id === id);
+    if (zone) {
+      const parsed = parseRgbaColor(zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga);
+      const classEl = document.getElementById("accessZoneClass");
+      const nameEl = document.getElementById("accessZoneName");
+      if (classEl) classEl.value = zone.zone_class;
+      if (nameEl) nameEl.value = zone.name;
+      fillZoneClass = zone.zone_class;
+      setFillColorInputs(parsed.color, parsed.opacity);
+    }
     renderAccessLists();
     drawAccessLayers();
     setStatus("Selected zone.");
@@ -433,6 +605,7 @@
         name,
         zone_class: fillZoneClass,
         polygon,
+        fill_color: getSelectedFillColor(),
         updated_by: "dash_access",
       }),
     });
@@ -440,6 +613,45 @@
     renderAccessLists();
     drawAccessLayers();
     setStatus(`Saved ${zoneLabel(created.zone_class)} zone "${created.name}".`);
+  };
+
+  window.saveSelectedZoneColor = async function () {
+    if (!getDashEvent() || !selectedZoneId) return;
+    const fillColor = hexToRgba(
+      document.getElementById("editZoneColor")?.value || "#4caf50",
+      Number(document.getElementById("editZoneOpacity")?.value || 38)
+    );
+    const updated = await api(`/events/${getDashEvent().id}/access-zones/${selectedZoneId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: document.getElementById("editZoneName")?.value?.trim(),
+        zone_class: document.getElementById("editZoneClass")?.value,
+        fill_color: fillColor,
+        updated_by: "dash_access",
+      }),
+    });
+    const idx = accessZones.findIndex((z) => z.id === selectedZoneId);
+    if (idx >= 0) accessZones[idx] = updated;
+    const classEl = document.getElementById("accessZoneClass");
+    const nameEl = document.getElementById("accessZoneName");
+    if (classEl) classEl.value = updated.zone_class;
+    if (nameEl) nameEl.value = updated.name;
+    fillZoneClass = updated.zone_class;
+    setFillColorInputs(
+      parseRgbaColor(updated.fill_color).color,
+      parseRgbaColor(updated.fill_color).opacity
+    );
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus(`Updated zone "${updated.name}" color.`);
+  };
+
+  window.saveZoneClassColorDefault = function () {
+    const cls = document.getElementById("accessZoneClass")?.value || fillZoneClass || "ga";
+    const color = document.getElementById("accessZoneColor")?.value || "#4caf50";
+    const opacity = Number(document.getElementById("accessZoneOpacity")?.value || 38);
+    localStorage.setItem(classColorStorageKey(cls), JSON.stringify({ color, opacity }));
+    setStatus(`Saved default fill color for ${zoneLabel(cls)}.`);
   };
 
   window.savePortalAccess = async function () {
@@ -594,8 +806,17 @@
     if (fillClass) {
       fillClass.onchange = () => {
         fillZoneClass = fillClass.value;
+        applyClassDefaultColor();
       };
     }
+
+    const colorEl = document.getElementById("accessZoneColor");
+    const opacityEl = document.getElementById("accessZoneOpacity");
+    if (colorEl) colorEl.addEventListener("input", syncFillColorPreview);
+    if (opacityEl) opacityEl.addEventListener("input", syncFillColorPreview);
+
+    renderZonePresets();
+    applyClassDefaultColor();
 
     setAccessTool("select");
   }

@@ -58,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.4.0")
+app = FastAPI(title="Beacon Server", version="3.4.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -968,7 +968,7 @@ def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.4.0",
+        "version": "3.4.1",
         "docs": "/docs",
     }
 
@@ -1074,7 +1074,7 @@ DASH_HTML = r'''
     .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}
     .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
     .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0;color:#fff;display:grid;place-items:center;font-size:10px;font-weight:900}.gate::after{content:'P'}.gate.handheld{width:15px;height:22px;border-radius:5px;background:#1565c0}.gate.handheld::after{content:'H'}.gate.ipad{width:22px;height:17px;border-radius:5px;background:#00a884}.gate.ipad::after{content:'I'}.gate.portal{width:24px;height:13px;border-radius:4px;background:#9c27b0}.gate.portal::after{content:'P'}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;cursor:pointer;mix-blend-mode:screen;filter:blur(.2px);box-shadow:0 0 22px rgba(255,255,255,.08)}.deviceBlob.selected{outline:2px solid rgba(255,255,255,.9);outline-offset:4px;box-shadow:0 0 0 5px rgba(124,255,155,.18),0 0 30px rgba(124,255,155,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#f7fbff;font-size:12px;text-shadow:0 2px 6px #000,0 0 4px #000;pointer-events:none;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:2px 6px;line-height:1}.deviceBlobCard{position:absolute;transform:translate(-50%,0);background:rgba(6,16,27,.94);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:7px 9px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:auto;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard.selected{border-color:#7CFF9B;box-shadow:0 0 0 2px rgba(124,255,155,.25),0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard b{display:block;font-size:12px;margin-bottom:2px}.deviceSweepStat{font-variant-numeric:tabular-nums;color:#d8edf8}.deviceSweepModePill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;font-size:10px;color:var(--muted)}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
-    .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.mapControls{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(7,16,27,.72)}.mapControls label{margin:0;color:var(--muted);font-size:12px;white-space:nowrap}.mapControls input[type=range]{padding:0}.mapOpacityValue{min-width:42px;text-align:right;color:#b7d7ff;font-size:12px}.dashSearch{display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;align-items:start;margin:0 0 14px}.dashSearch input{height:42px}.searchResults{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}.searchChip{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.06);padding:5px 9px;font-size:12px;cursor:pointer}.searchChip.active{outline:2px solid var(--green);background:rgba(124,255,155,.12)}.marker.searchHit{animation:beaconPulse 1.1s ease-in-out infinite;outline:4px solid var(--green);outline-offset:5px;z-index:40}@keyframes beaconPulse{0%,100%{box-shadow:0 0 0 0 rgba(124,255,155,.65),0 1px 8px rgba(0,0,0,.5)}50%{box-shadow:0 0 0 12px rgba(124,255,155,0),0 1px 8px rgba(0,0,0,.5)}}.hidden{display:none!important}
+    .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.zoneColorSwatch{width:28px;height:28px;border-radius:8px;border:2px solid rgba(255,255,255,.45);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.35)}.zoneColorSwatch.active{outline:2px solid var(--green);outline-offset:2px}.zoneColorPreview{width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}.mapControls{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(7,16,27,.72)}.mapControls label{margin:0;color:var(--muted);font-size:12px;white-space:nowrap}.mapControls input[type=range]{padding:0}.mapOpacityValue{min-width:42px;text-align:right;color:#b7d7ff;font-size:12px}.dashSearch{display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;align-items:start;margin:0 0 14px}.dashSearch input{height:42px}.searchResults{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}.searchChip{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.06);padding:5px 9px;font-size:12px;cursor:pointer}.searchChip.active{outline:2px solid var(--green);background:rgba(124,255,155,.12)}.marker.searchHit{animation:beaconPulse 1.1s ease-in-out infinite;outline:4px solid var(--green);outline-offset:5px;z-index:40}@keyframes beaconPulse{0%,100%{box-shadow:0 0 0 0 rgba(124,255,155,.65),0 1px 8px rgba(0,0,0,.5)}50%{box-shadow:0 0 0 12px rgba(124,255,155,0),0 1px 8px rgba(0,0,0,.5)}}.hidden{display:none!important}
   </style>
 </head>
 <body>
@@ -1111,7 +1111,18 @@ DASH_HTML = r'''
           <div><label>Zone name</label><input id="accessZoneName" placeholder="VIP Lawn" /></div>
           <div><label>Fill as</label><select id="accessZoneClass"><option value="ga">GA</option><option value="vip">VIP</option><option value="staff">Staff</option><option value="backstage">Backstage</option><option value="vendor">Vendor</option></select></div>
         </div>
-        <p class="small">Fill tool: close an area with barriers first, then click inside it on the map.</p>
+        <div class="row" style="margin-top:8px;align-items:end">
+          <div><label>Fill color</label><input id="accessZoneColor" type="color" value="#4caf50" style="width:100%;height:42px;padding:4px" /></div>
+          <div><label>Opacity</label><input id="accessZoneOpacity" type="range" min="10" max="90" value="38" style="padding:0" /><div class="small" id="accessZoneOpacityLabel">38%</div></div>
+          <div><label>Preview</label><div id="accessZoneColorPreview" class="zoneColorPreview"></div></div>
+        </div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <span class="small">Presets:</span>
+          <div id="accessZonePresets" class="row" style="gap:6px;flex:2"></div>
+          <button onclick="saveZoneClassColorDefault()">Save Color For Class</button>
+        </div>
+        <p class="small">Fill tool: close an area with barriers first, pick a color, then click inside it on the map.</p>
+        <div id="accessZoneEditor"></div>
         <h3 style="margin:14px 0 6px">Barriers</h3>
         <div class="list" id="accessBarrierList"></div>
         <h3 style="margin:14px 0 6px">Zones</h3>
