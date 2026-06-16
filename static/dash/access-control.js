@@ -317,7 +317,7 @@
   }
 
   function ensureZoneSvg() {
-    const wrap = document.getElementById("mapWrap");
+    const wrap = document.getElementById("mapStage") || document.getElementById("mapWrap");
     if (!wrap) return null;
     let svg = document.getElementById("zoneSvg");
     if (!svg) {
@@ -717,7 +717,7 @@
       select: "Select barriers, zones, or portals on the map or in the list.",
       drawBarrier: "Click the map or blue portal snap points (A/B) to trace your fence. Portals leave an opening for zone fill.",
       fillZone: "Click inside a barrier-enclosed area. Portals complete the boundary (A↔B) so fill won't leak to the map edge.",
-      linkPortal: "Select a portal/gate, then set zone access rules in the panel.",
+      linkPortal: "Select a portal on the map or use RFID Devices to edit rules per device.",
       rfidDevices: "Add, edit, or place RFID devices on the map.",
     };
     setStatus(hints[tool] || "Access control ready.");
@@ -805,10 +805,15 @@
   }
 
   function renderPortalEditor() {
-    const editor = document.getElementById("accessPortalEditor");
+    const gatePanel = document.getElementById("gateRulesPanel");
+    const fallback = document.getElementById("accessPortalEditor");
+    const editor = gatePanel || fallback;
     if (!editor) return;
+    if (gatePanel && fallback) fallback.innerHTML = "";
     if (selectedKind !== "gate" || !selectedId) {
-      editor.innerHTML = '<p class="muted">Select a portal to configure zone access.</p>';
+      editor.innerHTML = gatePanel
+        ? '<p class="muted small">Save device first, then configure portal rules here.</p>'
+        : '<p class="muted">Select a portal to configure zone access.</p>';
       return;
     }
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
@@ -831,10 +836,7 @@
     const classes = ["ga", "vip", "staff", "backstage", "vendor"];
     const allowed = new Set(gate.allowed_classes || []);
 
-    editor.innerHTML = `
-      <div class="card selected">
-        <h3>${escapeHtml(gate.name)} portal rules</h3>
-        <p class="small">Rotate snap points using the <b>fence heading slider in Map Layers</b> (left panel) for live preview.</p>
+    const rulesBody = `
         <label>Zone A (from / outside)</label>
         <select id="portalZoneA">${zoneOptions(true)}</select>
         <label>Zone B (to / inside)</label>
@@ -857,10 +859,13 @@
           )
           .join("")}</div>
         <div class="row" style="margin-top:10px">
-          <button class="primary" onclick="savePortalAccess()">Save Portal Rules</button>
-          <button onclick="snapPortalToBarrier()">Snap To Nearest Barrier</button>
-        </div>
-      </div>`;
+          <button class="primary" onclick="event.stopPropagation(); savePortalAccess()">Save Rules</button>
+          <button onclick="event.stopPropagation(); snapPortalToBarrier()">Snap To Nearest Barrier</button>
+        </div>`;
+
+    editor.innerHTML = gatePanel
+      ? rulesBody
+      : `<div class="card selected"><h3>${escapeHtml(gate.name)} portal rules</h3>${rulesBody}</div>`;
 
     document.getElementById("portalZoneA").value = gate.zone_a_id || "";
     document.getElementById("portalZoneB").value = gate.zone_b_id || "";
@@ -906,7 +911,7 @@
     portalHeadingPreview = null;
     portalFlowFlipPreview = null;
     if (typeof selectGate === "function") selectGate(id);
-    setAccessTool("linkPortal");
+    setAccessTool("rfidDevices");
     renderAccessLists();
     updateAccessMapPanel();
     drawAccessLayers();
@@ -1206,6 +1211,7 @@
         "click",
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
+          if (typeof shouldSuppressMapClick === "function" && shouldSuppressMapClick()) return;
           if (accessTool !== "drawBarrier" && accessTool !== "fillZone") return;
           const p = mapXY(e);
           handleAccessMapClick(p).then((handled) => {
