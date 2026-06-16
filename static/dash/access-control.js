@@ -229,51 +229,21 @@
     return { x: gx / (GRID_W - 1), y: gy / (GRID_H - 1) };
   }
 
-  function drawGridLineClear(grid, x0, y0, x1, y1, clear) {
-    let dx = Math.abs(x1 - x0);
-    let dy = Math.abs(y1 - y0);
-    const sx = x0 < x1 ? 1 : -1;
-    const sy = y0 < y1 ? 1 : -1;
-    let err = dx - dy;
-    while (true) {
-      clear(x0, y0);
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) clear(x0 + ox, y0 + oy);
-      }
-      if (x0 === x1 && y0 === y1) break;
-      const e2 = 2 * err;
-      if (e2 > -dy) {
-        err -= dy;
-        x0 += sx;
-      }
-      if (e2 < dx) {
-        err += dx;
-        y0 += sy;
-      }
-    }
-  }
-
-  function carveGateOpening(grid, gate) {
+  function addPortalVirtualWall(grid, gate) {
     const pair = getPortalSnapPair(gate);
     if (!pair) return;
-    const clear = (gx, gy) => {
-      if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 0;
+    const mark = (gx, gy) => {
+      if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 1;
     };
-    const a = gridFromNorm(pair.a.x, pair.a.y);
-    const b = gridFromNorm(pair.b.x, pair.b.y);
-    drawGridLineClear(grid, a.gx, a.gy, b.gx, b.gy, clear);
-    const c = gridFromNorm(pair.center.x, pair.center.y);
     const { ux, uy } = headingUnitRad(pair.heading);
-    const px = -uy;
-    const py = ux;
-    for (let t = -4; t <= 4; t++) {
-      const gx = Math.round(c.gx + px * t);
-      const gy = Math.round(c.gy + py * t);
-      clear(gx, gy);
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) clear(gx + ox, gy + oy);
-      }
-    }
+    const extend = 0.006;
+    const ax = pair.a.x - ux * extend;
+    const ay = pair.a.y - uy * extend;
+    const bx = pair.b.x + ux * extend;
+    const by = pair.b.y + uy * extend;
+    const a = gridFromNorm(ax, ay);
+    const b = gridFromNorm(bx, by);
+    drawGridLine(grid, a.gx, a.gy, b.gx, b.gy, mark);
   }
 
   function rasterizeWalls(grid, gates) {
@@ -290,7 +260,7 @@
       }
     });
 
-    (gates || []).forEach((gate) => carveGateOpening(grid, gate));
+    (gates || []).forEach((gate) => addPortalVirtualWall(grid, gate));
   }
 
   function drawGridLine(grid, x0, y0, x1, y1, mark) {
@@ -570,7 +540,7 @@
     const hints = {
       select: "Select barriers, zones, or portals on the map or in the list.",
       drawBarrier: "Click the map or blue portal snap points (A/B) to trace your fence. Portals leave an opening for zone fill.",
-      fillZone: "Click inside a closed area (barriers + portal openings). Pick a color first.",
+      fillZone: "Click inside a barrier-enclosed area. Portals complete the boundary (A↔B) so fill won't leak to the map edge.",
       linkPortal: "Select a portal/gate, then set zone access rules in the panel.",
     };
     setStatus(hints[tool] || "Access control ready.");

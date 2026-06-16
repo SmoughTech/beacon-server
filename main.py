@@ -58,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.5.0")
+app = FastAPI(title="Beacon Server", version="3.5.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -987,7 +987,7 @@ def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.5.0",
+        "version": "3.5.1",
         "docs": "/docs",
     }
 
@@ -1140,7 +1140,7 @@ DASH_HTML = r'''
           <div id="accessZonePresets" class="row" style="gap:6px;flex:2"></div>
           <button onclick="saveZoneClassColorDefault()">Save Color For Class</button>
         </div>
-        <p class="small">Draw barriers along fence lines — blue snap points appear on each side of every portal/gate. Snap to them so the portal opening closes the zone. Rotate fence heading in Portal Rules if snap points need turning.</p>
+        <p class="small">Draw barriers to snap points A/B on each portal (leave the gap between them as the door). Zone fill treats the A↔B line as part of the boundary so fill stays inside.</p>
         <div id="accessZoneEditor"></div>
         <h3 style="margin:14px 0 6px">Barriers</h3>
         <div class="list" id="accessBarrierList"></div>
@@ -1360,7 +1360,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.5.0"></script>
+<script src="/static/dash/access-control.js?v=3.5.1"></script>
 </body>
 </html>
 '''
