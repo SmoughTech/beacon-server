@@ -32,6 +32,78 @@
   let selectedBarrierId = null;
   let selectedZoneId = null;
   let fillZoneClass = "ga";
+  let portalHeadingPreview = null;
+  const ACCESS_LAYER_KEY = "beacon_access_layers";
+  let accessLayers = { snapPoints: true, barriers: true, zones: true, gates: true };
+
+  function loadAccessLayerPrefs() {
+    try {
+      const raw = localStorage.getItem(ACCESS_LAYER_KEY);
+      if (raw) accessLayers = { ...accessLayers, ...JSON.parse(raw) };
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function saveAccessLayerPrefs() {
+    localStorage.setItem(ACCESS_LAYER_KEY, JSON.stringify(accessLayers));
+  }
+
+  function syncAccessLayerCheckboxes() {
+    const map = {
+      accessLayerSnap: "snapPoints",
+      accessLayerBarriers: "barriers",
+      accessLayerZones: "zones",
+      accessLayerGates: "gates",
+    };
+    Object.entries(map).forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!accessLayers[key];
+    });
+  }
+
+  function applyAccessLayerVisibility() {
+    document.querySelectorAll(".marker.gate").forEach((el) => {
+      el.style.display = accessLayers.gates ? "" : "none";
+    });
+  }
+
+  function updateAccessMapPanel() {
+    const panel = document.getElementById("accessMapPanel");
+    const orient = document.getElementById("accessPortalOrient");
+    if (!panel) return;
+    const onAccess = typeof currentTab !== "undefined" && currentTab === "access";
+    panel.classList.toggle("hidden", !onAccess);
+    if (!onAccess) return;
+
+    syncAccessLayerCheckboxes();
+
+    const gateSelected =
+      typeof selectedKind !== "undefined" && selectedKind === "gate" && typeof selectedId !== "undefined" && selectedId;
+    const gate = gateSelected ? (getDashGates() || []).find((g) => g.id === selectedId) : null;
+
+    if (orient) {
+      orient.classList.toggle("hidden", !gate);
+      if (gate) {
+        const title = document.getElementById("accessPortalOrientTitle");
+        const deg = document.getElementById("accessPortalOrientDeg");
+        const slider = document.getElementById("mapPortalFenceHeading");
+        const heading = Math.round(gateFenceHeading(gate));
+        if (title) title.textContent = `${gate.name || "Portal"} — fence heading`;
+        if (deg) deg.textContent = `${heading}°`;
+        if (slider && document.activeElement !== slider) slider.value = String(heading);
+      }
+    }
+  }
+
+  function setAccessLayer(key, enabled) {
+    accessLayers[key] = !!enabled;
+    saveAccessLayerPrefs();
+    syncAccessLayerCheckboxes();
+    if (typeof drawBase === "function") drawBase();
+    else drawAccessLayers();
+    updateAccessMapPanel();
+  }
 
   function zoneLabel(cls) {
     return ({ ga: "GA", vip: "VIP", staff: "Staff", backstage: "Backstage", vendor: "Vendor" }[cls] || cls);
@@ -141,6 +213,15 @@
   }
 
   function gateFenceHeading(gate) {
+    if (
+      portalHeadingPreview != null &&
+      typeof selectedKind !== "undefined" &&
+      selectedKind === "gate" &&
+      typeof selectedId !== "undefined" &&
+      gate?.id === selectedId
+    ) {
+      return ((portalHeadingPreview % 360) + 360) % 360;
+    }
     return Number(gate?.fence_heading_deg ?? gate?.fenceHeadingDeg ?? 0) % 360;
   }
 
@@ -406,6 +487,7 @@
     svg.innerHTML = "";
 
     accessZones.forEach((zone) => {
+      if (!accessLayers.zones) return;
       const pts = zone.polygon || [];
       if (pts.length < 3) return;
       const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
@@ -425,6 +507,7 @@
     });
 
     accessBarriers.forEach((barrier) => {
+      if (!accessLayers.barriers) return;
       const pts = barrier.points || [];
       if (pts.length < 2) return;
       const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
@@ -445,7 +528,7 @@
       svg.appendChild(pl);
     });
 
-    if (draftBarrierPoints.length >= 1) {
+    if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
       const draft = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
       draft.setAttribute("fill", "none");
       draft.setAttribute(
@@ -458,20 +541,30 @@
       svg.appendChild(draft);
     }
 
-    drawPortalSnapLayers(svg);
+    if (accessLayers.snapPoints) {
+      drawPortalSnapLayers(svg);
+    } else if (typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId) {
+      drawPortalSnapLayers(svg, selectedId);
+    }
   }
 
-  function drawPortalSnapLayers(svg) {
+  function drawPortalSnapLayers(svg, onlyGateId) {
+    const selectedGateId =
+      typeof selectedKind !== "undefined" && selectedKind === "gate" ? selectedId : null;
     (getDashGates() || []).forEach((gate) => {
+      if (onlyGateId && gate.id !== onlyGateId) return;
       const pair = getPortalSnapPair(gate);
       if (!pair) return;
+      const isSelected = gate.id === selectedGateId;
+      const stroke = isSelected ? "#6df7a7" : "#64b5f6";
+      const dotR = isSelected ? "10" : "8";
 
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.setAttribute("x1", String(pair.a.x * SVG_W));
       line.setAttribute("y1", String(pair.a.y * SVG_H));
       line.setAttribute("x2", String(pair.b.x * SVG_W));
       line.setAttribute("y2", String(pair.b.y * SVG_H));
-      line.setAttribute("stroke", "#64b5f6");
+      line.setAttribute("stroke", stroke);
       line.setAttribute("stroke-width", "3");
       line.setAttribute("stroke-dasharray", "7 5");
       line.setAttribute("opacity", "0.85");
@@ -482,8 +575,8 @@
         const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
         circle.setAttribute("cx", String(pt.x * SVG_W));
         circle.setAttribute("cy", String(pt.y * SVG_H));
-        circle.setAttribute("r", "8");
-        circle.setAttribute("fill", "#64b5f6");
+        circle.setAttribute("r", dotR);
+        circle.setAttribute("fill", stroke);
         circle.setAttribute("stroke", "#ffffff");
         circle.setAttribute("stroke-width", "2");
         circle.setAttribute("data-portal-snap", "1");
@@ -544,6 +637,7 @@
       linkPortal: "Select a portal/gate, then set zone access rules in the panel.",
     };
     setStatus(hints[tool] || "Access control ready.");
+    updateAccessMapPanel();
     if (typeof drawBase === "function") drawBase();
   }
 
@@ -660,17 +754,11 @@
 
     const classes = ["ga", "vip", "staff", "backstage", "vendor"];
     const allowed = new Set(gate.allowed_classes || []);
-    const fenceHeading = Math.round(gateFenceHeading(gate));
 
     editor.innerHTML = `
       <div class="card selected">
         <h3>${escapeHtml(gate.name)} portal rules</h3>
-        <label>Fence line heading (snap points A ↔ B)</label>
-        <input id="portalFenceHeading" type="range" min="0" max="359" value="${fenceHeading}" />
-        <div class="small" id="portalFenceHeadingLabel">${fenceHeading}° — rotate until blue snap points sit on your fence line</div>
-        <div class="row" style="margin-top:8px">
-          <button onclick="savePortalFenceHeading()">Save Portal Orientation</button>
-        </div>
+        <p class="small">Rotate snap points using the <b>fence heading slider under the map</b> for live preview.</p>
         <label>Zone A (from / outside)</label>
         <select id="portalZoneA">${zoneOptions(true)}</select>
         <label>Zone B (to / inside)</label>
@@ -702,18 +790,13 @@
     document.getElementById("portalZoneB").value = gate.zone_b_id || "";
     document.getElementById("portalBarrier").value = gate.barrier_id || "";
     document.getElementById("portalDirection").value = gate.direction || "bidirectional";
-    document.getElementById("portalFenceHeading")?.addEventListener("input", () => {
-      const label = document.getElementById("portalFenceHeadingLabel");
-      const val = document.getElementById("portalFenceHeading")?.value || fenceHeading;
-      if (label) label.textContent = `${val}° — rotate until blue snap points sit on your fence line`;
-      gate.fence_heading_deg = Number(val);
-      drawAccessLayers();
-    });
+    updateAccessMapPanel();
   }
 
   function selectBarrier(id) {
     selectedBarrierId = id;
     selectedZoneId = null;
+    portalHeadingPreview = null;
     renderAccessLists();
     drawAccessLayers();
     setStatus("Selected barrier.");
@@ -722,6 +805,7 @@
   function selectZone(id) {
     selectedZoneId = id;
     selectedBarrierId = null;
+    portalHeadingPreview = null;
     const zone = accessZones.find((z) => z.id === id);
     if (zone) {
       const parsed = parseRgbaColor(zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga);
@@ -741,9 +825,12 @@
   window.selectAccessZone = selectZone;
 
   window.selectAccessPortal = function (id) {
+    portalHeadingPreview = null;
     if (typeof selectGate === "function") selectGate(id);
     setAccessTool("linkPortal");
     renderAccessLists();
+    updateAccessMapPanel();
+    drawAccessLayers();
   };
 
   window.finishDraftBarrier = async function () {
@@ -856,9 +943,16 @@
     setStatus(`Saved default fill color for ${zoneLabel(cls)}.`);
   };
 
+  window.resetPortalFenceHeadingPreview = function () {
+    portalHeadingPreview = null;
+    updateAccessMapPanel();
+    drawAccessLayers();
+    setStatus("Reset portal heading preview to saved value.");
+  };
+
   window.savePortalFenceHeading = async function () {
     if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
-    const heading = parseInt(document.getElementById("portalFenceHeading")?.value || "0", 10);
+    const heading = parseInt(document.getElementById("mapPortalFenceHeading")?.value || "0", 10);
     const updated = await api(`/events/${getDashEvent().id}/wrstops-gates/${selectedId}`, {
       method: "PUT",
       body: JSON.stringify({
@@ -868,7 +962,9 @@
     });
     const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
     if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
+    portalHeadingPreview = null;
     renderAccessLists();
+    updateAccessMapPanel();
     drawAccessLayers();
     setStatus(`Saved portal fence heading (${heading}°). Snap points updated.`);
   };
@@ -972,12 +1068,14 @@
     const origDraw = drawBase;
     drawBase = function () {
       origDraw();
+      applyAccessLayerVisibility();
       if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
     };
 
     const origSetTab = setTab;
     setTab = function (tab, autoLoad) {
       origSetTab(tab, autoLoad);
+      updateAccessMapPanel();
       if (tab === "access") {
         loadAccessLayout().then(() => {
           setAccessTool("select");
@@ -996,9 +1094,12 @@
       const origSelectGate = selectGate;
       selectGate = function (id) {
         origSelectGate(id);
+        portalHeadingPreview = null;
         if (typeof currentTab !== "undefined" && currentTab === "access") {
           setAccessTool("linkPortal");
           renderAccessLists();
+          updateAccessMapPanel();
+          drawAccessLayers();
         }
       };
     }
@@ -1041,9 +1142,37 @@
 
     renderZonePresets();
     applyClassDefaultColor();
+    loadAccessLayerPrefs();
+    syncAccessLayerCheckboxes();
 
+    const layerMap = {
+      accessLayerSnap: "snapPoints",
+      accessLayerBarriers: "barriers",
+      accessLayerZones: "zones",
+      accessLayerGates: "gates",
+    };
+    Object.entries(layerMap).forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("change", () => setAccessLayer(key, el.checked));
+    });
+
+    const mapHeadingSlider = document.getElementById("mapPortalFenceHeading");
+    if (mapHeadingSlider) {
+      mapHeadingSlider.addEventListener("input", () => {
+        portalHeadingPreview = Number(mapHeadingSlider.value);
+        const deg = document.getElementById("accessPortalOrientDeg");
+        if (deg) deg.textContent = `${Math.round(portalHeadingPreview)}°`;
+        drawAccessLayers();
+      });
+    }
+
+    updateAccessMapPanel();
     setAccessTool("select");
   }
+
+  window.setAccessLayer = setAccessLayer;
+  window.updateAccessMapPanel = updateAccessMapPanel;
 
   window.loadAccessLayout = loadAccessLayout;
   window.setAccessTool = setAccessTool;
