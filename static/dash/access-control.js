@@ -34,7 +34,7 @@
   let fillZoneClass = "ga";
   let portalHeadingPreview = null;
   const ACCESS_LAYER_KEY = "beacon_access_layers";
-  let accessLayers = { snapPoints: true, barriers: true, zones: true, gates: true };
+  let accessLayers = { snapPoints: true, barriers: true, zones: true, gates: true, pois: true, anchors: true };
 
   function loadAccessLayerPrefs() {
     try {
@@ -55,6 +55,8 @@
       accessLayerBarriers: "barriers",
       accessLayerZones: "zones",
       accessLayerGates: "gates",
+      accessLayerPois: "pois",
+      accessLayerAnchors: "anchors",
     };
     Object.entries(map).forEach(([id, key]) => {
       const el = document.getElementById(id);
@@ -66,16 +68,16 @@
     document.querySelectorAll(".marker.gate").forEach((el) => {
       el.style.display = accessLayers.gates ? "" : "none";
     });
+    document.querySelectorAll(".marker.poi").forEach((el) => {
+      el.style.display = accessLayers.pois ? "" : "none";
+    });
+    document.querySelectorAll(".marker.anchor").forEach((el) => {
+      el.style.display = accessLayers.anchors ? "" : "none";
+    });
   }
 
   function updateAccessMapPanel() {
-    const panel = document.getElementById("accessMapPanel");
     const orient = document.getElementById("accessPortalOrient");
-    if (!panel) return;
-    const onAccess = typeof currentTab !== "undefined" && currentTab === "access";
-    panel.classList.toggle("hidden", !onAccess);
-    if (!onAccess) return;
-
     syncAccessLayerCheckboxes();
 
     const gateSelected =
@@ -89,7 +91,7 @@
         const deg = document.getElementById("accessPortalOrientDeg");
         const slider = document.getElementById("mapPortalFenceHeading");
         const heading = Math.round(gateFenceHeading(gate));
-        if (title) title.textContent = `${gate.name || "Portal"} — fence heading`;
+        if (title) title.textContent = `${gate.name || "RFID"} — fence heading`;
         if (deg) deg.textContent = `${heading}°`;
         if (slider && document.activeElement !== slider) slider.value = String(heading);
       }
@@ -644,8 +646,7 @@
   function renderAccessLists() {
     const barrierList = document.getElementById("accessBarrierList");
     const zoneList = document.getElementById("accessZoneList");
-    const portalList = document.getElementById("accessPortalList");
-    if (!barrierList || !zoneList || !portalList) return;
+    if (!barrierList || !zoneList) return;
 
     barrierList.innerHTML =
       accessBarriers
@@ -663,18 +664,9 @@
         })
         .join("") || '<p class="muted">No zones yet.</p>';
 
-    portalList.innerHTML =
-      (getDashGates() || [])
-        .map((g) => {
-          const a = accessZones.find((z) => z.id === g.zone_a_id);
-          const b = accessZones.find((z) => z.id === g.zone_b_id);
-          const allowed = (g.allowed_classes || []).map(zoneLabel).join(", ") || "none";
-          return `<div class="card ${selectedKind === "gate" && selectedId === g.id ? "selected" : ""}" onclick="selectAccessPortal('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${escapeHtml(g.device_type || "portal")} • ${allowed}</p><p class="muted">${a ? a.name : "Outside?"} → ${b ? b.name : "Unset"}</p></div>`;
-        })
-        .join("") || '<p class="muted">Add WRSTOPS gates first (+ Gate on POIs tab).</p>';
-
     renderZoneEditor();
-    renderPortalEditor();
+    if (typeof renderAccessRfidList === "function") renderAccessRfidList();
+    else renderPortalEditor();
   }
 
   function renderZoneEditor() {
@@ -758,7 +750,7 @@
     editor.innerHTML = `
       <div class="card selected">
         <h3>${escapeHtml(gate.name)} portal rules</h3>
-        <p class="small">Rotate snap points using the <b>fence heading slider under the map</b> for live preview.</p>
+        <p class="small">Rotate snap points using the <b>fence heading slider in Map Layers</b> (left panel) for live preview.</p>
         <label>Zone A (from / outside)</label>
         <select id="portalZoneA">${zoneOptions(true)}</select>
         <label>Zone B (to / inside)</label>
@@ -1150,6 +1142,8 @@
       accessLayerBarriers: "barriers",
       accessLayerZones: "zones",
       accessLayerGates: "gates",
+      accessLayerPois: "pois",
+      accessLayerAnchors: "anchors",
     };
     Object.entries(layerMap).forEach(([id, key]) => {
       const el = document.getElementById(id);
@@ -1174,6 +1168,7 @@
   window.setAccessLayer = setAccessLayer;
   window.updateAccessMapPanel = updateAccessMapPanel;
 
+  window.renderPortalEditor = renderPortalEditor;
   window.loadAccessLayout = loadAccessLayout;
   window.setAccessTool = setAccessTool;
   installAccessControl();
