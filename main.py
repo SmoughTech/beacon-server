@@ -58,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.4.1")
+app = FastAPI(title="Beacon Server", version="3.4.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -968,7 +968,7 @@ def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.4.1",
+        "version": "3.4.2",
         "docs": "/docs",
     }
 
@@ -1341,7 +1341,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js"></script>
+<script src="/static/dash/access-control.js?v=3.4.2"></script>
 </body>
 </html>
 '''

@@ -126,7 +126,7 @@
     ).join("");
     host.querySelectorAll("[data-zone-preset]").forEach((btn) => {
       btn.onclick = () => {
-        setFillColorInputs(btn.dataset.zoneColor, Number(btn.dataset.zoneOpacity));
+        setFillColorInputs(btn.getAttribute("data-zone-color"), Number(btn.getAttribute("data-zone-opacity")));
       };
     });
     syncFillColorPreview();
@@ -221,6 +221,82 @@
     }
   }
 
+  function cornerToNorm(gx, gy) {
+    return { x: gx / GRID_W, y: gy / GRID_H };
+  }
+
+  function cellFilled(filled, cx, cy) {
+    if (cx < 0 || cy < 0 || cx >= GRID_W || cy >= GRID_H) return false;
+    return filled[cy][cx];
+  }
+
+  function simplifyOrthogonalPolygon(points) {
+    if (points.length < 4) return points;
+    const merged = [];
+    const eps = 1e-9;
+    for (let i = 0; i < points.length; i++) {
+      const prev = points[(i - 1 + points.length) % points.length];
+      const curr = points[i];
+      const next = points[(i + 1) % points.length];
+      const sameX = Math.abs(prev.x - curr.x) < eps && Math.abs(curr.x - next.x) < eps;
+      const sameY = Math.abs(prev.y - curr.y) < eps && Math.abs(curr.y - next.y) < eps;
+      if (!sameX && !sameY) merged.push(curr);
+    }
+    return merged.length >= 3 ? merged : points;
+  }
+
+  function traceBoundaryPolygon(filled) {
+    const segments = [];
+    for (let cy = 0; cy < GRID_H; cy++) {
+      for (let cx = 0; cx < GRID_W; cx++) {
+        if (!filled[cy][cx]) continue;
+        if (!cellFilled(filled, cx, cy - 1)) segments.push([cx, cy, cx + 1, cy]);
+        if (!cellFilled(filled, cx + 1, cy)) segments.push([cx + 1, cy, cx + 1, cy + 1]);
+        if (!cellFilled(filled, cx, cy + 1)) segments.push([cx + 1, cy + 1, cx, cy + 1]);
+        if (!cellFilled(filled, cx - 1, cy)) segments.push([cx, cy + 1, cx, cy]);
+      }
+    }
+    if (!segments.length) return [];
+
+    const adj = new Map();
+    const key = (x, y) => `${x},${y}`;
+    segments.forEach(([x1, y1, x2, y2]) => {
+      if (!adj.has(key(x1, y1))) adj.set(key(x1, y1), []);
+      adj.get(key(x1, y1)).push([x2, y2]);
+    });
+
+    const polygon = [];
+    let x = segments[0][0];
+    let y = segments[0][1];
+    const startX = x;
+    const startY = y;
+    let prevX = null;
+    let prevY = null;
+    const used = new Set();
+
+    for (let guard = 0; guard <= segments.length + 2; guard++) {
+      polygon.push(cornerToNorm(x, y));
+      const outs = adj.get(key(x, y)) || [];
+      let next = null;
+      for (const [nx, ny] of outs) {
+        const edgeKey = `${x},${y}->${nx},${ny}`;
+        if (used.has(edgeKey)) continue;
+        if (prevX !== null && nx === prevX && ny === prevY) continue;
+        next = [nx, ny];
+        used.add(edgeKey);
+        break;
+      }
+      if (!next) break;
+      if (next[0] === startX && next[1] === startY && polygon.length >= 3) break;
+      prevX = x;
+      prevY = y;
+      x = next[0];
+      y = next[1];
+    }
+
+    return simplifyOrthogonalPolygon(polygon);
+  }
+
   function floodFillRegion(seedX, seedY, gates) {
     const grid = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(0));
     rasterizeWalls(grid, gates);
@@ -229,22 +305,20 @@
       throw new Error("Click inside an open area, not on a barrier.");
     }
 
-    const visited = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(false));
+    const filled = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(false));
     const q = [[seed.gx, seed.gy]];
-    visited[seed.gy][seed.gx] = true;
+    filled[seed.gy][seed.gx] = true;
     let touchesEdge = false;
-    const cells = [];
 
     while (q.length) {
       const [cx, cy] = q.shift();
-      cells.push([cx, cy]);
       if (cx === 0 || cy === 0 || cx === GRID_W - 1 || cy === GRID_H - 1) touchesEdge = true;
       [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
         const nx = cx + dx;
         const ny = cy + dy;
         if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H) return;
-        if (visited[ny][nx] || grid[ny][nx] === 1) return;
-        visited[ny][nx] = true;
+        if (filled[ny][nx] || grid[ny][nx] === 1) return;
+        filled[ny][nx] = true;
         q.push([nx, ny]);
       });
     }
@@ -253,24 +327,7 @@
       throw new Error("That area is open to the map edge. Close it with barriers first.");
     }
 
-    const edgeSet = new Set();
-    cells.forEach(([cx, cy]) => {
-      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
-        const nx = cx + dx;
-        const ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H || grid[ny][nx] === 1) {
-          edgeSet.add(`${cx},${cy}`);
-        }
-      });
-    });
-
-    const polygon = [...edgeSet]
-      .map((key) => {
-        const [gx, gy] = key.split(",").map(Number);
-        return normFromGrid(gx, gy);
-      })
-      .sort((a, b) => a.x - b.x || a.y - b.y);
-
+    const polygon = traceBoundaryPolygon(filled);
     if (polygon.length < 3) {
       throw new Error("Could not build a zone polygon from that click.");
     }
@@ -384,7 +441,7 @@
       accessZones
         .map((z) => {
           const swatch = z.fill_color || ZONE_COLORS[z.zone_class] || ZONE_COLORS.ga;
-          return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} points</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
+          return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} vertices</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
         })
         .join("") || '<p class="muted">No zones yet.</p>';
 
@@ -444,9 +501,13 @@
       const label = document.getElementById("editZoneOpacityLabel");
       if (preview) preview.style.background = fill;
       if (label) label.textContent = `${document.getElementById("editZoneOpacity")?.value || parsed.opacity}%`;
+      zone.fill_color = fill;
+      drawAccessLayers();
     };
     document.getElementById("editZoneColor")?.addEventListener("input", syncEditPreview);
+    document.getElementById("editZoneColor")?.addEventListener("change", syncEditPreview);
     document.getElementById("editZoneOpacity")?.addEventListener("input", syncEditPreview);
+    document.getElementById("editZoneOpacity")?.addEventListener("change", syncEditPreview);
   }
 
   function renderPortalEditor() {
@@ -598,18 +659,21 @@
   };
 
   window.saveFilledZone = async function (polygon) {
+    fillZoneClass = document.getElementById("accessZoneClass")?.value || fillZoneClass || "ga";
     const name = document.getElementById("accessZoneName")?.value?.trim() || `${zoneLabel(fillZoneClass)} Zone`;
+    const fillColor = getSelectedFillColor();
     const created = await api(`/events/${getDashEvent().id}/access-zones`, {
       method: "POST",
       body: JSON.stringify({
         name,
         zone_class: fillZoneClass,
         polygon,
-        fill_color: getSelectedFillColor(),
+        fill_color: fillColor,
         updated_by: "dash_access",
       }),
     });
     accessZones.push(created);
+    selectedZoneId = created.id;
     renderAccessLists();
     drawAccessLayers();
     setStatus(`Saved ${zoneLabel(created.zone_class)} zone "${created.name}".`);
@@ -707,7 +771,7 @@
     setStatus(`Snapped portal to nearest barrier (${bestDist.toFixed(4)} map units away).`);
   };
 
-  function handleAccessMapClick(p) {
+  async function handleAccessMapClick(p) {
     if (typeof currentTab === "undefined" || currentTab !== "access") return false;
 
     if (accessTool === "drawBarrier") {
@@ -721,7 +785,7 @@
       try {
         fillZoneClass = document.getElementById("accessZoneClass")?.value || "ga";
         const polygon = floodFillRegion(p.x, p.y, getDashGates());
-        saveFilledZone(polygon);
+        await saveFilledZone(polygon);
       } catch (err) {
         setStatus(err.message || String(err));
       }
@@ -794,9 +858,9 @@
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (accessTool !== "drawBarrier" && accessTool !== "fillZone") return;
           const p = mapXY(e);
-          if (handleAccessMapClick(p)) {
-            e.stopImmediatePropagation();
-          }
+          handleAccessMapClick(p).then((handled) => {
+            if (handled) e.stopImmediatePropagation();
+          });
         },
         true
       );
@@ -812,8 +876,14 @@
 
     const colorEl = document.getElementById("accessZoneColor");
     const opacityEl = document.getElementById("accessZoneOpacity");
-    if (colorEl) colorEl.addEventListener("input", syncFillColorPreview);
-    if (opacityEl) opacityEl.addEventListener("input", syncFillColorPreview);
+    if (colorEl) {
+      colorEl.addEventListener("input", syncFillColorPreview);
+      colorEl.addEventListener("change", syncFillColorPreview);
+    }
+    if (opacityEl) {
+      opacityEl.addEventListener("input", syncFillColorPreview);
+      opacityEl.addEventListener("change", syncFillColorPreview);
+    }
 
     renderZonePresets();
     applyClassDefaultColor();
