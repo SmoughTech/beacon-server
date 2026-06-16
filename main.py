@@ -58,7 +58,7 @@ def map_file_status(base_name: str) -> dict:
     }
 
 
-app = FastAPI(title="Beacon Server", version="3.6.1")
+app = FastAPI(title="Beacon Server", version="3.6.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -151,6 +151,7 @@ class WrstopsGateCreate(BaseModel):
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default="NORMAL", max_length=40)
     fence_heading_deg: Optional[float] = Field(default=0.0, ge=0.0, lt=360.0)
+    portal_flow_flipped: Optional[bool] = Field(default=False)
     updated_by: Optional[str] = "android_wrstops"
 
 
@@ -167,6 +168,7 @@ class WrstopsGateUpdate(BaseModel):
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default=None, max_length=40)
     fence_heading_deg: Optional[float] = Field(default=None, ge=0.0, lt=360.0)
+    portal_flow_flipped: Optional[bool] = None
     updated_by: Optional[str] = "android_wrstops"
 
 
@@ -337,6 +339,17 @@ def normalize_fence_heading(value: Optional[float]) -> float:
         return 0.0
 
 
+def normalize_portal_flow_flipped(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def normalize_gate_device_type(value: Optional[str]) -> str:
     raw = (value or "portal").strip().lower().replace(" ", "_").replace("-", "_")
     aliases = {
@@ -385,6 +398,12 @@ def wrstops_gate_row_to_dict(row: sqlite3.Row) -> dict:
         ),
         "fenceHeadingDeg": normalize_fence_heading(
             row["fence_heading_deg"] if "fence_heading_deg" in row.keys() else 0.0
+        ),
+        "portal_flow_flipped": normalize_portal_flow_flipped(
+            row["portal_flow_flipped"] if "portal_flow_flipped" in row.keys() else 0
+        ),
+        "portalFlowFlipped": normalize_portal_flow_flipped(
+            row["portal_flow_flipped"] if "portal_flow_flipped" in row.keys() else 0
         ),
         **enrich_wrstops_gate_dict(row),
     }
@@ -612,6 +631,8 @@ def init_db():
             conn.execute("ALTER TABLE wrstops_gates ADD COLUMN device_type TEXT NOT NULL DEFAULT 'portal'")
         if "fence_heading_deg" not in existing_gate_columns:
             conn.execute("ALTER TABLE wrstops_gates ADD COLUMN fence_heading_deg REAL NOT NULL DEFAULT 0")
+        if "portal_flow_flipped" not in existing_gate_columns:
+            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN portal_flow_flipped INTEGER NOT NULL DEFAULT 0")
 
 
         conn.execute(
@@ -987,7 +1008,7 @@ def root():
     return {
         "name": "Beacon Server",
         "status": "ok",
-        "version": "3.6.1",
+        "version": "3.6.2",
         "docs": "/docs",
     }
 
@@ -1090,7 +1111,7 @@ DASH_HTML = r'''
     input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:#07101b;color:var(--text);padding:10px;outline:none} textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px} label{display:block;font-size:12px;color:var(--muted);margin:8px 0 5px}
     .app{max-width:1500px;margin:0 auto;padding:18px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}.brand h1{margin:0;font-size:30px;letter-spacing:.05em}.brand p{margin:4px 0 0;color:var(--muted)}
     .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}
-    .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}.dashShell{display:grid;grid-template-columns:minmax(240px,260px) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1100px){.dashShell{grid-template-columns:1fr}}.dashMain{min-width:0}.dashSidebar{position:sticky;top:18px;min-width:240px}.dashSidebar .panelBody{overflow:visible}.dashLayerList{display:flex;flex-direction:column;gap:6px}.dashLayerItem{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;color:#d8edf8;white-space:nowrap}.dashLayerItem input[type=checkbox]{width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;flex:0 0 18px;accent-color:var(--green)}.accessPortalOrient{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessPortalOrient h4{margin:0 0 6px;font-size:14px;color:#b3e5fc}.accessPortalOrient input[type=range]{padding:0;margin:6px 0;width:100%}.accessPortalOrientDeg{color:#64b5f6;font-weight:700}
+    .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}.dashShell{display:grid;grid-template-columns:minmax(240px,260px) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1100px){.dashShell{grid-template-columns:1fr}}.dashMain{min-width:0}.dashSidebar{position:sticky;top:18px;min-width:240px}.dashSidebar .panelBody{overflow:visible}.dashLayerList{display:flex;flex-direction:column;gap:6px}.dashLayerItem{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;color:#d8edf8;white-space:nowrap}.dashLayerItem input[type=checkbox]{width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;flex:0 0 18px;accent-color:var(--green)}.accessPortalOrient{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessPortalOrient h4{margin:0 0 6px;font-size:14px;color:#b3e5fc}.accessPortalOrient input[type=range]{padding:0;margin:6px 0;width:100%}.accessPortalOrientDeg{color:#64b5f6;font-weight:700}.flowFlipBtn{width:100%;margin:4px 0 8px;text-align:center;font-size:13px}.flowFlipBtn.active{outline:2px solid #ffb74d;background:#3d2e14;border-color:#ffb74d}
     .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
     .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:18px;height:18px;background:#9c27b0;color:#fff;display:grid;place-items:center;font-size:10px;font-weight:900}.gate::after{content:'P'}.gate.handheld{width:15px;height:22px;border-radius:5px;background:#1565c0}.gate.handheld::after{content:'H'}.gate.ipad{width:22px;height:17px;border-radius:5px;background:#00a884}.gate.ipad::after{content:'I'}.gate.portal{width:24px;height:13px;border-radius:4px;background:#9c27b0}.gate.portal::after{content:'P'}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;cursor:pointer;mix-blend-mode:screen;filter:blur(.2px);box-shadow:0 0 22px rgba(255,255,255,.08)}.deviceBlob.selected{outline:2px solid rgba(255,255,255,.9);outline-offset:4px;box-shadow:0 0 0 5px rgba(124,255,155,.18),0 0 30px rgba(124,255,155,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#f7fbff;font-size:12px;text-shadow:0 2px 6px #000,0 0 4px #000;pointer-events:none;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:2px 6px;line-height:1}.deviceBlobCard{position:absolute;transform:translate(-50%,0);background:rgba(6,16,27,.94);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:7px 9px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:auto;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard.selected{border-color:#7CFF9B;box-shadow:0 0 0 2px rgba(124,255,155,.25),0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard b{display:block;font-size:12px;margin-bottom:2px}.deviceSweepStat{font-variant-numeric:tabular-nums;color:#d8edf8}.deviceSweepModePill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;font-size:10px;color:var(--muted)}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
     .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.zoneColorSwatch{width:28px;height:28px;border-radius:8px;border:2px solid rgba(255,255,255,.45);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.35)}.zoneColorSwatch.active{outline:2px solid var(--green);outline-offset:2px}.zoneColorPreview{width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}.mapControls{display:flex;align-items:center;gap:10px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(7,16,27,.72)}.mapControls label{margin:0;color:var(--muted);font-size:12px;white-space:nowrap}.mapControls input[type=range]{padding:0}.mapOpacityValue{min-width:42px;text-align:right;color:#b7d7ff;font-size:12px}.dashSearch{display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;align-items:start;margin:0 0 14px}.dashSearch input{height:42px}.searchResults{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}.searchChip{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.06);padding:5px 9px;font-size:12px;cursor:pointer}.searchChip.active{outline:2px solid var(--green);background:rgba(124,255,155,.12)}.marker.searchHit{animation:beaconPulse 1.1s ease-in-out infinite;outline:4px solid var(--green);outline-offset:5px;z-index:40}@keyframes beaconPulse{0%,100%{box-shadow:0 0 0 0 rgba(124,255,155,.65),0 1px 8px rgba(0,0,0,.5)}50%{box-shadow:0 0 0 12px rgba(124,255,155,0),0 1px 8px rgba(0,0,0,.5)}}.hidden{display:none!important}
@@ -1101,7 +1122,7 @@ DASH_HTML = r'''
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
   <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
-  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Snap A/B</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> RFID devices</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Live preview on map while dragging.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
+  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Snap A/B</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> RFID devices</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Live preview on map while dragging.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
   <div class="dashSearch"><input id="dashSearchInput" placeholder="Search RFID, POIs, survey paths, anchors, device sweeps..." onkeydown="if(event.key==='Enter')dashSearch()" oninput="if(!this.value.trim())clearDashSearch()"><button class="primary" onclick="dashSearch()">Search</button><button class="ghost" onclick="clearDashSearch()">Clear</button><div id="dashSearchResults" class="searchResults"></div></div>
   <div class="layout">
@@ -1120,10 +1141,13 @@ DASH_HTML = r'''
           <button data-access-tool="drawBarrier" onclick="setAccessTool('drawBarrier')">Draw Barrier</button>
           <button data-access-tool="fillZone" onclick="setAccessTool('fillZone')">Fill Zone</button>
           <button data-access-tool="linkPortal" onclick="setAccessTool('linkPortal')">Portal Rules</button>
+          <button data-access-tool="rfidDevices" onclick="setAccessTool('rfidDevices')">RFID Devices</button>
         </div>
+        <div id="accessRfidSection" class="hidden">
         <h3 style="margin:14px 0 6px">RFID Devices</h3>
         <div class="row"><button class="primary" onclick="startAddGate()">+ RFID Device</button><button onclick="loadGates()">Refresh</button></div>
         <div class="list" id="accessRfidList" style="margin-top:8px"></div>
+        </div>
         <div class="row" style="margin-top:10px">
           <div><label>Barrier name</label><input id="accessBarrierName" placeholder="North fence" /></div>
           <div><label>Barrier type</label><select id="accessBarrierType"><option value="fence">Fence</option><option value="barricade">Barricade</option><option value="wall">Wall</option><option value="rope">Rope</option></select></div>
@@ -1211,7 +1235,7 @@ function selectGate(id){setSelected('gate',id); setTab('access', false); renderA
 async function loadGates(){gates=await api(`/events/${currentEvent.id}/wrstops-gates`); renderAccessRfidList(); drawBase();}
 function renderAccessRfidList(){const list=document.getElementById('accessRfidList'); if(!list)return; const addCard=(selectedKind==='newGate')?newGateEditor():''; const gateCards=gates.map(g=>{const sel=selectedKind==='gate'&&selectedId===g.id; return `<div class="card ${sel?'selected':''}" id="gate-${g.id}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${gateDeviceLabel(g)} • ${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}${g.latitude!=null&&g.longitude!=null?'<br>GPS '+g.latitude+', '+g.longitude:''}</p>${sel?gateEditor(g):''}</div>`}).join(''); list.innerHTML=addCard+(gateCards||'<p class="muted">No RFID devices yet. Click + RFID Device.</p>'); if(typeof renderPortalEditor==='function')renderPortalEditor();}
 function renderGates(){renderAccessRfidList();}
-function startAddGate(){setSelected('newGate','new'); setTab('access',false); renderAccessRfidList(); drawBase(); setStatus('Create a new RFID device. Enter details or click Place on Map.');}
+function startAddGate(){setSelected('newGate','new'); setTab('access',false); if(typeof setAccessTool==='function')setAccessTool('rfidDevices'); else renderAccessRfidList(); drawBase(); setStatus('Create a new RFID device. Enter details or click Place on Map.');}
 function newGateEditor(){return `<div class="card selected"><h3>Add RFID Device</h3><p class="muted">Create a portal, handheld, or tablet reader for ${escapeHtml(currentEvent.name)}.</p><label>Name</label><input id="newGateName" value="RFID ${gates.length+1}"><label>Device Type</label><select id="newGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions('portal')}</select><div class="row"><div><label>Map X</label><input id="newGateMapX" value="0.5000"></div><div><label>Map Y</label><input id="newGateMapY" value="0.5000"></div></div><div class="row"><div><label>Latitude</label><input id="newGateLat" placeholder="optional"></div><div><label>Longitude</label><input id="newGateLng" placeholder="optional"></div></div><div class="row"><div><label>Scan Count</label><input id="newGateScans" value="0"></div><div><label>IP Address</label><input id="newGateIp" placeholder="optional"></div></div><div class="row"><div><label>Status</label><select id="newGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE">ONLINE</option><option value="OFFLINE">OFFLINE</option></select></div><div><label>Override</label><select id="newGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL">NORMAL</option><option value="OFFLINE">OFFLINE</option></select></div></div><label>Fence heading (°)</label><input id="newGateFenceHeading" type="range" min="0" max="359" value="0" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation()"><div class="small">Snap points sit on this fence line (0° = horizontal).</div><div class="row"><button class="primary" onclick="event.stopPropagation(); createGate()">Create Device</button><button onclick="event.stopPropagation(); mapClickMode='newGate'; setStatus('Click the map to place the RFID device.')">Place on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('newGateLat','newGateLng','newGateMapX','newGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('newGateMapX','newGateMapY','newGateLat','newGateLng')">Infer GPS from Map</button><button onclick="event.stopPropagation(); selectedKind=null; selectedId=null; renderAccessRfidList(); drawBase(); setStatus('Cancelled.')">Cancel</button></div></div>`}
 async function createGate(){const lat=document.getElementById('newGateLat').value.trim(), lng=document.getElementById('newGateLng').value.trim(); const payload={name:document.getElementById('newGateName').value||'RFID Device',device_type:document.getElementById('newGateDeviceType').value,map_x:parseFloat(document.getElementById('newGateMapX').value),map_y:parseFloat(document.getElementById('newGateMapY').value),scan_count:parseInt(document.getElementById('newGateScans').value||'0',10),connection_status:document.getElementById('newGateStatus').value,override_status:document.getElementById('newGateOverride').value,ip_address:document.getElementById('newGateIp').value||null,fence_heading_deg:parseInt(document.getElementById('newGateFenceHeading').value||'0',10),updated_by:'dash_gate_creator'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} if(!Number.isFinite(payload.map_x)||!Number.isFinite(payload.map_y)){setStatus('Enter valid map X/Y.'); return;} const created=await api(`/events/${currentEvent.id}/wrstops-gates`,{method:'POST',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/wrstops-gates`); setSelected('gate',created.id); setTab('access',false); renderAccessRfidList(); drawBase(); setStatus('Created RFID device.');}
 function gateEditor(g){return `<label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><label>Device Type</label><select id="editGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions(g.device_type||g.deviceType||'portal')}</select><div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div><div class="row"><div><label>Status</label><select id="editGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><p class="small">Use the fence heading slider in the left Map Layers panel for live snap-point preview.</p><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Device</button><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move this RFID device.')">Move on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('editGateLat','editGateLng','editGateMapX','editGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('editGateMapX','editGateMapY','editGateLat','editGateLng')">Infer GPS from Map</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div>`}
@@ -1367,7 +1391,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.6.1"></script>
+<script src="/static/dash/access-control.js?v=3.6.2"></script>
 </body>
 </html>
 '''
@@ -1934,10 +1958,10 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
             """
             INSERT INTO wrstops_gates (
                 id, event_id, name, device_type, map_x, map_y, latitude, longitude, accuracy_meters, scan_count,
-                connection_status, ip_address, override_status, fence_heading_deg,
+                connection_status, ip_address, override_status, fence_heading_deg, portal_flow_flipped,
                 created_at, updated_at, updated_by
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 gate_id,
@@ -1954,6 +1978,7 @@ def create_wrstops_gate(event_id: str, payload: WrstopsGateCreate):
                 payload.ip_address,
                 override_status,
                 normalize_fence_heading(payload.fence_heading_deg),
+                1 if normalize_portal_flow_flipped(payload.portal_flow_flipped) else 0,
                 timestamp,
                 timestamp,
                 payload.updated_by,
@@ -2010,6 +2035,13 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 existing["fence_heading_deg"] if "fence_heading_deg" in existing.keys() else 0.0
             )
         )
+        portal_flow_flipped = (
+            normalize_portal_flow_flipped(payload.portal_flow_flipped)
+            if payload.portal_flow_flipped is not None
+            else normalize_portal_flow_flipped(
+                existing["portal_flow_flipped"] if "portal_flow_flipped" in existing.keys() else 0
+            )
+        )
 
         conn.execute(
             """
@@ -2027,6 +2059,7 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 ip_address = ?,
                 override_status = ?,
                 fence_heading_deg = ?,
+                portal_flow_flipped = ?,
                 updated_at = ?,
                 updated_by = ?
             WHERE id = ? AND event_id = ?
@@ -2044,6 +2077,7 @@ def update_wrstops_gate(event_id: str, gate_id: str, payload: WrstopsGateUpdate)
                 ip_address,
                 override_status or "NORMAL",
                 fence_heading_deg,
+                1 if portal_flow_flipped else 0,
                 now_iso(),
                 payload.updated_by,
                 gate_id,
