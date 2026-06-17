@@ -30,10 +30,10 @@ def find_map_url(base_name: str) -> str:
     Returns the first existing static map URL for a base filename.
 
     This lets Dash work with any of these files:
-        static/maps/test_event_map.png
-        static/maps/test_event_map.jpg
-        static/maps/test_event_map.jpeg
-        static/maps/test_event_map.webp
+        static/maps/test_fest_map.png
+        static/maps/test_fest_map.jpg
+        static/maps/test_fest_map.jpeg
+        static/maps/test_fest_map.webp
 
     The important part is that the base name stays consistent.
     """
@@ -74,7 +74,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-DEFAULT_EVENT_ID = "test_event"
+DEFAULT_EVENT_ID = "test_fest"
 
 BUILT_IN_POIS: list[dict] = []
 
@@ -555,7 +555,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS pois (
                 id TEXT PRIMARY KEY,
-                event_id TEXT NOT NULL DEFAULT 'test_event',
+                event_id TEXT NOT NULL DEFAULT 'test_fest',
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
                 map_x REAL NOT NULL,
@@ -813,7 +813,7 @@ def init_db():
             conn.execute("ALTER TABLE pois ADD COLUMN gps_source TEXT")
 
         if "event_id" not in existing_columns:
-            conn.execute("ALTER TABLE pois ADD COLUMN event_id TEXT NOT NULL DEFAULT 'test_event'")
+            conn.execute("ALTER TABLE pois ADD COLUMN event_id TEXT NOT NULL DEFAULT 'test_fest'")
 
         conn.execute(
             """
@@ -1035,10 +1035,10 @@ def health():
 
 EVENTS = [
     {
-        "id": "test_event",
-        "name": "Test Event",
-        "map_name": "test_event_map",
-        "description": "Blank test event for SiteOps, scanners, and map tooling.",
+        "id": "test_fest",
+        "name": "Test Fest",
+        "map_name": "test_fest_map",
+        "description": "Test Fest park map for SiteOps, scanners, and access control.",
     },
 ]
 
@@ -1248,7 +1248,7 @@ document.getElementById('mapWrap').addEventListener('mousemove',handleMapEdgeScr
 document.getElementById('mapWrap').addEventListener('mouseleave',stopEdgeScroll);
 document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='moveGate'&&selectedKind==='gate'){document.getElementById('editGateMapX').value=p.x.toFixed(4); document.getElementById('editGateMapY').value=p.y.toFixed(4); setStatus('Scanner map position updated in editor. Click Save Scanner.');} if(mapClickMode==='newGate'){document.getElementById('newGateMapX').value=p.x.toFixed(4); document.getElementById('newGateMapY').value=p.y.toFixed(4); setStatus('New scanner map position set. Click Create Scanner.');} if(mapClickMode==='newPoi'){document.getElementById('newPoiMapX').value=p.x.toFixed(4); document.getElementById('newPoiMapY').value=p.y.toFixed(4); setStatus('New POI map position set. Click Create POI.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} mapClickMode=null;});
 function updateSurveyInfo(){document.getElementById('rsMapInfo').textContent=`Start: ${remoteSurveyStart?remoteSurveyStart.x.toFixed(4)+', '+remoteSurveyStart.y.toFixed(4):'not set'} • End: ${remoteSurveyEnd?remoteSurveyEnd.x.toFixed(4)+', '+remoteSurveyEnd.y.toFixed(4):'not set'}`}
-async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent((events.find(ev=>ev.id==='test_event')||events[0]||{id:'test_event'}).id);}
+async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent((events.find(ev=>ev.id==='test_fest')||events[0]||{id:'test_fest'}).id);}
 async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const stage=getMapStage(); stage.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.src=currentEvent.map_url; img.style.opacity=(mapOpacity/100).toFixed(2); img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; stage.prepend(ph)}; stage.prepend(img); setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); selectedKind=null; selectedId=null; await refreshAll();}
 async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/scanners`),api(`/events/${currentEvent.id}/calibration-anchors`)]); try{surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`)}catch(e){surveyPaths=[]} try{deviceSweeps=await api(`/events/${currentEvent.id}/device-map-sweeps`)}catch(e){deviceSweeps=[]} drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
 function selectPoi(id){setSelected('poi',id); setTab('data', false); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}

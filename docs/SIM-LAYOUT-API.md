@@ -64,9 +64,9 @@ Legacy clients may still see duplicate keys `gates`, `portal_graph`, and `via_po
 ```json
 {
   "schema_version": 1,
-  "event_id": "test_event",
-  "event_name": "Test Event",
-  "map_url": "/static/maps/test_event_map.png",
+  "event_id": "test_fest",
+  "event_name": "Test Fest",
+  "map_url": "/static/maps/test_fest_map.png",
   "coordinate_system": {
     "space": "normalized",
     "origin": "top_left",
