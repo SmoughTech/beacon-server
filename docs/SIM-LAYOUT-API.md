@@ -8,7 +8,7 @@ Beacon desktop sim loads event operational layouts via a single consolidated end
 GET /events/{event_id}/sim-layout
 ```
 
-Returns JSON describing barriers, zones, portals, calibration anchors, precomputed navmesh, and portal graph.
+Returns JSON describing barriers, zones, scanners, calibration anchors, precomputed navmesh, and scanner graph.
 
 ## Coordinate system
 
@@ -33,29 +33,31 @@ Returns JSON describing barriers, zones, portals, calibration anchors, precomput
 ```
 
 - `0` = walkable
-- `1` = blocked (barrier or portal virtual wall)
+- `1` = blocked (barrier or scanner virtual wall)
 
 Navmesh is computed server-side in [`geometry.py`](geometry.py) using the same rasterization rules as Dash [`access-control.js`](static/dash/access-control.js).
 
-## Portal graph
+## Scanner graph
 
-Derived from `wrstops_gates` portal-access fields:
+Derived from scanner access fields on gate records:
 
-- **Nodes:** `outside`, each zone (`kind: zone`), each gate (`kind: portal`)
-- **Edges:** zone-to-zone transitions via a portal, respecting `direction` and `allowed_classes`
+- **Nodes:** `outside`, each zone (`kind: zone`), each scanner (`kind: scanner`)
+- **Edges:** zone-to-zone transitions via a scanner, respecting `direction` and `allowed_classes`
 
 ```json
-"portal_graph": {
+"scanner_graph": {
   "nodes": [
     { "id": "outside", "kind": "outside", "label": "Outside" },
     { "id": "zone_abc", "kind": "zone", "label": "GA Lawn", "zone_class": "ga", "centroid": { "x": 0.5, "y": 0.6 } },
-    { "id": "wrstops_xyz", "kind": "portal", "label": "Main Portal", "map_x": 0.42, "map_y": 0.55 }
+    { "id": "scanner_xyz", "kind": "scanner", "label": "Main Scanner", "map_x": 0.42, "map_y": 0.55 }
   ],
   "edges": [
-    { "from": "zone_ga", "to": "zone_vip", "via_portal": "wrstops_xyz", "allowed_classes": ["ga", "vip"] }
+    { "from": "zone_ga", "to": "zone_vip", "via_scanner": "scanner_xyz", "allowed_classes": ["ga", "vip"] }
   ]
 }
 ```
+
+Legacy clients may still see duplicate keys `gates`, `portal_graph`, and `via_portal` for backward compatibility.
 
 ## Full response shape
 
@@ -75,10 +77,10 @@ Derived from `wrstops_gates` portal-access fields:
   },
   "barriers": [],
   "zones": [],
-  "gates": [],
+  "scanners": [],
   "calibration_anchors": [],
   "navmesh": { "encoding": "base64", "width": 400, "height": 225, "walkable_value": 0, "blocked_value": 1, "data": "..." },
-  "portal_graph": { "nodes": [], "edges": [] },
+  "scanner_graph": { "nodes": [], "edges": [] },
   "generated_at": "2026-06-16T12:00:00Z"
 }
 ```

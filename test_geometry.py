@@ -1,6 +1,6 @@
 """Tests for geometry navmesh rasterization."""
 
-from geometry import GRID_H, GRID_W, build_portal_graph, navmesh_to_bytes, rasterize_walls
+from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
 
 
 def test_empty_layout_walkable():
@@ -22,7 +22,7 @@ def test_barrier_blocks_cells():
     assert any(b == 1 for b in raw)
 
 
-def test_portal_graph():
+def test_scanner_graph():
     zones = [
         {
             "id": "zone_ga",
@@ -40,7 +40,7 @@ def test_portal_graph():
     gates = [
         {
             "id": "gate_1",
-            "name": "Main Portal",
+            "name": "Main Scanner",
             "map_x": 0.5,
             "map_y": 0.5,
             "fence_heading_deg": 0,
@@ -50,6 +50,6 @@ def test_portal_graph():
             "direction": "bidirectional",
         }
     ]
-    graph = build_portal_graph(zones, gates)
-    assert any(n["kind"] == "portal" for n in graph["nodes"])
+    graph = build_scanner_graph(zones, gates)
+    assert any(n["kind"] == "scanner" for n in graph["nodes"])
     assert len(graph["edges"]) >= 2

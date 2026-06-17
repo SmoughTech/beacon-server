@@ -7,8 +7,8 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 
-from access_control import barrier_row_to_dict, enrich_wrstops_gate_dict, zone_row_to_dict
-from geometry import GRID_H, GRID_W, build_portal_graph, navmesh_to_bytes, rasterize_walls
+from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, zone_row_to_dict
+from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
 
 
 SIM_LAYOUT_SCHEMA_VERSION = 1
@@ -19,7 +19,7 @@ def register_sim_layout(
     get_connection: Callable,
     now_iso: Callable[[], str],
     get_event_config: Callable[[str], dict[str, Any]],
-    wrstops_gate_row_to_dict: Callable[[Any], dict[str, Any]],
+    scanner_gate_row_to_dict: Callable[[Any], dict[str, Any]],
     calibration_anchor_row_to_dict: Callable[[Any], dict[str, Any]],
 ) -> None:
     router = APIRouter()
@@ -69,12 +69,12 @@ def register_sim_layout(
 
         barriers = [barrier_row_to_dict(row) for row in barrier_rows]
         zones = [zone_row_to_dict(row) for row in zone_rows]
-        gates = [wrstops_gate_row_to_dict(row) for row in gate_rows]
+        gates = [scanner_gate_row_to_dict(row) for row in gate_rows]
         anchors = [calibration_anchor_row_to_dict(row) for row in anchor_rows]
 
         grid = rasterize_walls(barriers, gates)
         navmesh_raw = navmesh_to_bytes(grid)
-        portal_graph = build_portal_graph(zones, gates)
+        scanner_graph = build_scanner_graph(zones, gates)
 
         return {
             "schema_version": SIM_LAYOUT_SCHEMA_VERSION,
@@ -91,6 +91,7 @@ def register_sim_layout(
             },
             "barriers": barriers,
             "zones": zones,
+            "scanners": gates,
             "gates": gates,
             "calibration_anchors": anchors,
             "navmesh": {
@@ -101,7 +102,8 @@ def register_sim_layout(
                 "blocked_value": 1,
                 "data": base64.b64encode(navmesh_raw).decode("ascii"),
             },
-            "portal_graph": portal_graph,
+            "scanner_graph": scanner_graph,
+            "portal_graph": scanner_graph,
             "generated_at": now_iso(),
         }
 

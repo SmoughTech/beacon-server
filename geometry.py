@@ -128,7 +128,7 @@ def navmesh_to_bytes(grid: list[list[int]]) -> bytes:
     return bytes(out)
 
 
-def build_portal_graph(
+def build_scanner_graph(
     zones: list[dict[str, Any]],
     gates: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -160,11 +160,11 @@ def build_portal_graph(
         nodes.append(
             {
                 "id": gate_id,
-                "kind": "portal",
+                "kind": "scanner",
                 "label": gate.get("name", gate_id),
                 "map_x": pair["center"]["x"],
                 "map_y": pair["center"]["y"],
-                "device_type": gate.get("device_type", "portal"),
+                "device_type": gate.get("device_type", "scanner"),
             }
         )
 
@@ -184,7 +184,7 @@ def build_portal_graph(
                 {
                     "from": from_id,
                     "to": to_id,
-                    "via_portal": via,
+                    "via_scanner": via,
                     "allowed_classes": allowed,
                 }
             )
@@ -195,3 +195,6 @@ def build_portal_graph(
             add_edge(zone_b or "outside", zone_a or "outside", gate_id)
 
     return {"nodes": nodes, "edges": edges}
+
+
+build_portal_graph = build_scanner_graph

@@ -1,4 +1,4 @@
-"""Access control layout: barriers, zones, and portal rules for Beacon Dash."""
+"""Access control layout: barriers, zones, and SiteOps scanner rules for Beacon Dash."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ class AccessZoneUpdate(BaseModel):
     updated_by: Optional[str] = "dash_access"
 
 
-class GatePortalAccessUpdate(BaseModel):
+class ScannerAccessUpdate(BaseModel):
     zone_a_id: Optional[str] = Field(default=None, max_length=80)
     zone_b_id: Optional[str] = Field(default=None, max_length=80)
     allowed_classes: List[str] = Field(default_factory=list)
@@ -149,7 +149,7 @@ def zone_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def enrich_wrstops_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
+def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
     keys = row.keys()
     allowed_raw = row["allowed_classes"] if "allowed_classes" in keys else None
     try:
@@ -438,15 +438,15 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             conn.commit()
         return {"deleted": True, "id": zone_id}
 
-    @router.put("/events/{event_id}/wrstops-gates/{gate_id}/portal-access")
-    def update_gate_portal_access(event_id: str, gate_id: str, payload: GatePortalAccessUpdate):
+    @router.put("/events/{event_id}/scanners/{gate_id}/access")
+    def update_scanner_access(event_id: str, gate_id: str, payload: ScannerAccessUpdate):
         with get_connection() as conn:
             existing = conn.execute(
                 "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
                 (gate_id, event_id),
             ).fetchone()
             if existing is None:
-                raise HTTPException(status_code=404, detail="WRSTOPS gate not found")
+                raise HTTPException(status_code=404, detail="Scanner not found")
 
             for zone_id in [payload.zone_a_id, payload.zone_b_id]:
                 if not zone_id:
@@ -516,7 +516,15 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             "updated_at": row["updated_at"],
             "updated_by": row["updated_by"],
         }
-        payload_dict.update(enrich_wrstops_gate_dict(row))
+        payload_dict.update(enrich_scanner_gate_dict(row))
         return payload_dict
 
+    @router.put("/events/{event_id}/wrstops-gates/{gate_id}/portal-access", include_in_schema=False)
+    def update_gate_portal_access_legacy(event_id: str, gate_id: str, payload: ScannerAccessUpdate):
+        return update_scanner_access(event_id, gate_id, payload)
+
     app.include_router(router)
+
+
+GatePortalAccessUpdate = ScannerAccessUpdate
+enrich_wrstops_gate_dict = enrich_scanner_gate_dict

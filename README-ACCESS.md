@@ -24,7 +24,7 @@ beacon-server/
 
 1. **Draw Barrier** — click map points along fences/barricades, then **Finish Barrier**.
 2. **Fill Zone** — close an area with barriers, pick GA/VIP/Staff, click inside the enclosed area.
-3. **Portal Rules** — select a WRSTOPS gate, set Zone A → Zone B, allowed classes, save.
+3. **Access Rules** — select a scanner, set Zone A → Zone B, allowed classes, save.
 
 ## API endpoints added
 
@@ -32,5 +32,5 @@ beacon-server/
 - `PUT/DELETE /events/{id}/access-barriers/{barrier_id}`
 - `GET/POST /events/{id}/access-zones`
 - `PUT/DELETE /events/{id}/access-zones/{zone_id}`
-- `PUT /events/{id}/wrstops-gates/{gate_id}/portal-access`
+- `PUT /events/{id}/scanners/{gate_id}/access`
 - `GET /events/{id}/sim-layout` — consolidated layout + navmesh for desktop sim (see [docs/SIM-LAYOUT-API.md](docs/SIM-LAYOUT-API.md))
