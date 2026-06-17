@@ -118,7 +118,10 @@
     saveAccessLayerPrefs();
     syncAccessLayerCheckboxes();
     if (typeof drawBase === "function") drawBase();
-    else drawAccessLayers();
+    else {
+      decorateGateMarkers();
+      drawAccessLayers();
+    }
     updateAccessMapPanel();
   }
 
@@ -624,6 +627,54 @@
     svg.appendChild(head);
   }
 
+  function gateMarkerHalfPx(gate) {
+    const t = String(gate?.device_type || gate?.deviceType || "portal").toLowerCase();
+    if (t === "handheld") return { w: 7, h: 11 };
+    if (t === "ipad") return { w: 11, h: 8 };
+    return { w: 12, h: 6 };
+  }
+
+  function decorateGateMarkers() {
+    document.querySelectorAll(".marker.gate .gateSnapDot").forEach((d) => d.remove());
+    const show = accessLayers.snapPoints || accessTool === "drawBarrier";
+    if (!show) return;
+
+    (getDashGates() || []).forEach((gate) => {
+      const el = document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
+      if (!el) return;
+      const pair = getPortalSnapPair(gate);
+      if (!pair) return;
+      const { ux, uy } = headingUnitRad(pair.heading);
+      const half = gateMarkerHalfPx(gate);
+      const edge = Math.max(half.w, half.h) * 0.9;
+      const isSelected =
+        typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId === gate.id;
+
+      [
+        { side: "a", pt: pair.a, sign: -1 },
+        { side: "b", pt: pair.b, sign: 1 },
+      ].forEach(({ side, pt, sign }) => {
+        const dot = document.createElement("span");
+        dot.className = `gateSnapDot${accessTool === "drawBarrier" ? " gateSnapDotHit" : ""}${isSelected ? " selected" : ""}`;
+        dot.style.left = `calc(50% + ${(ux * edge * sign).toFixed(2)}px)`;
+        dot.style.top = `calc(50% + ${(uy * edge * sign).toFixed(2)}px)`;
+        dot.title = accessTool === "drawBarrier" ? `Snap barrier to ${pair.gateName}` : "";
+        if (accessTool === "drawBarrier") {
+          dot.onclick = (ev) => {
+            ev.stopPropagation();
+            addDraftBarrierPoint(
+              { x: pt.x, y: pt.y },
+              { snapped: true, gateName: pair.gateName, side }
+            );
+          };
+        } else {
+          dot.style.pointerEvents = "none";
+        }
+        el.appendChild(dot);
+      });
+    });
+  }
+
   function drawPortalSnapLayers(svg, onlyGateId) {
     const selectedGateId =
       typeof selectedKind !== "undefined" && selectedKind === "gate" ? selectedId : null;
@@ -632,60 +683,26 @@
       const pair = getPortalSnapPair(gate);
       if (!pair) return;
       const isSelected = gate.id === selectedGateId;
-      const showSnap = accessLayers.snapPoints || isSelected;
       const showFlow = accessLayers.snapPoints || accessLayers.gates || isSelected;
 
-      if (showSnap) {
-        const stroke = isSelected ? "#6df7a7" : "#64b5f6";
-        const dotR = isSelected ? "10" : "8";
-
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        line.setAttribute("x1", String(pair.a.x * SVG_W));
-        line.setAttribute("y1", String(pair.a.y * SVG_H));
-        line.setAttribute("x2", String(pair.b.x * SVG_W));
-        line.setAttribute("y2", String(pair.b.y * SVG_H));
-        line.setAttribute("stroke", stroke);
-        line.setAttribute("stroke-width", "3");
-        line.setAttribute("stroke-dasharray", "7 5");
-        line.setAttribute("opacity", "0.85");
-        line.style.pointerEvents = "none";
-        svg.appendChild(line);
-
+      if (accessTool === "drawBarrier") {
         [pair.a, pair.b].forEach((pt) => {
-          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          circle.setAttribute("cx", String(pt.x * SVG_W));
-          circle.setAttribute("cy", String(pt.y * SVG_H));
-          circle.setAttribute("r", dotR);
-          circle.setAttribute("fill", stroke);
-          circle.setAttribute("stroke", "#ffffff");
-          circle.setAttribute("stroke-width", "2");
-          circle.setAttribute("data-portal-snap", "1");
-          circle.setAttribute("title", `${pair.gateName} snap ${pt.side.toUpperCase()}`);
-          if (accessTool === "drawBarrier") {
-            circle.style.pointerEvents = "auto";
-            circle.style.cursor = "crosshair";
-            circle.onclick = (ev) => {
-              ev.stopPropagation();
-              addDraftBarrierPoint(
-                { x: pt.x, y: pt.y },
-                { snapped: true, gateName: pair.gateName, side: pt.side }
-              );
-            };
-          } else {
-            circle.style.pointerEvents = "none";
-          }
-          svg.appendChild(circle);
-
-          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-          label.setAttribute("x", String(pt.x * SVG_W));
-          label.setAttribute("y", String(pt.y * SVG_H - 12));
-          label.setAttribute("text-anchor", "middle");
-          label.setAttribute("fill", "#b3e5fc");
-          label.setAttribute("font-size", "11");
-          label.setAttribute("font-weight", "700");
-          label.textContent = pt.side.toUpperCase();
-          label.style.pointerEvents = "none";
-          svg.appendChild(label);
+          const hit = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          hit.setAttribute("cx", String(pt.x * SVG_W));
+          hit.setAttribute("cy", String(pt.y * SVG_H));
+          hit.setAttribute("r", "14");
+          hit.setAttribute("fill", "transparent");
+          hit.setAttribute("data-portal-snap", "1");
+          hit.style.pointerEvents = "auto";
+          hit.style.cursor = "crosshair";
+          hit.onclick = (ev) => {
+            ev.stopPropagation();
+            addDraftBarrierPoint(
+              { x: pt.x, y: pt.y },
+              { snapped: true, gateName: pair.gateName, side: pt.side }
+            );
+          };
+          svg.appendChild(hit);
         });
       }
 
@@ -715,7 +732,7 @@
     });
     const hints = {
       select: "Select barriers, zones, or portals on the map or in the list.",
-      drawBarrier: "Click the map or blue portal snap points (A/B) to trace your fence. Portals leave an opening for zone fill.",
+      drawBarrier: "Click the map or portal edge snap dots to trace your fence.",
       fillZone: "Click inside a barrier-enclosed area. Portals complete the boundary (A↔B) so fill won't leak to the map edge.",
       linkPortal: "Select a portal on the map or use RFID Devices to edit rules per device.",
       rfidDevices: "Add, edit, or place RFID devices on the map.",
@@ -1169,18 +1186,29 @@
     drawBase = function () {
       origDraw();
       applyAccessLayerVisibility();
-      if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
+      if (typeof currentTab !== "undefined" && currentTab === "access") {
+        decorateGateMarkers();
+        drawAccessLayers();
+      }
     };
 
     const origSetTab = setTab;
     setTab = function (tab, autoLoad) {
+      const prevTab = typeof currentTab !== "undefined" ? currentTab : null;
       origSetTab(tab, autoLoad);
       updateAccessMapPanel();
       if (tab === "access") {
-        loadAccessLayout().then(() => {
-          setAccessTool("select");
-          drawAccessLayers();
-        });
+        const finish = () => drawAccessLayers();
+        if (prevTab !== "access" && autoLoad !== false) {
+          loadAccessLayout().then(() => {
+            setAccessTool("select");
+            finish();
+          });
+        } else if (prevTab !== "access") {
+          loadAccessLayout().then(finish);
+        } else {
+          finish();
+        }
       }
     };
 
@@ -1211,7 +1239,6 @@
         "click",
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
-          if (typeof shouldSuppressMapClick === "function" && shouldSuppressMapClick()) return;
           if (accessTool !== "drawBarrier" && accessTool !== "fillZone") return;
           const p = mapXY(e);
           handleAccessMapClick(p).then((handled) => {
