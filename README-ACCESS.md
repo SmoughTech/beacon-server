@@ -33,3 +33,4 @@ beacon-server/
 - `GET/POST /events/{id}/access-zones`
 - `PUT/DELETE /events/{id}/access-zones/{zone_id}`
 - `PUT /events/{id}/wrstops-gates/{gate_id}/portal-access`
+- `GET /events/{id}/sim-layout` — consolidated layout + navmesh for desktop sim (see [docs/SIM-LAYOUT-API.md](docs/SIM-LAYOUT-API.md))

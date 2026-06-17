@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from access_control import enrich_wrstops_gate_dict, init_access_control_db, register_access_control
+from sim_layout import register_sim_layout
 
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "beacon.db")
@@ -1057,6 +1058,16 @@ def get_events():
 @app.get("/events/{event_id}")
 def get_event(event_id: str):
     return get_event_config(event_id)
+
+
+register_sim_layout(
+    app,
+    get_connection,
+    now_iso,
+    get_event_config,
+    wrstops_gate_row_to_dict,
+    calibration_anchor_row_to_dict,
+)
 
 
 @app.get("/maps/status")
