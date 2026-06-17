@@ -3,8 +3,8 @@
   const SVG_H = 562.5;
   const GRID_W = 400;
   const GRID_H = 225;
-  const PORTAL_SNAP_DIST = 0.024;
-  const PORTAL_SNAP_RADIUS = 0.022;
+  const PORTAL_SNAP_DIST = 0.011;
+  const PORTAL_SNAP_RADIUS = 0.014;
 
   const ZONE_COLORS = {
     ga: "rgba(76,175,80,0.38)",
@@ -740,7 +740,7 @@
       if (!pair) return;
       const { ux, uy } = headingUnitRad(pair.heading);
       const half = gateMarkerHalfPx(gate);
-      const edge = Math.max(half.w, half.h) * 0.9;
+      const edge = Math.max(half.w, half.h) * 0.52;
       const isSelected =
         (typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId === gate.id) ||
         gate.id === "__new_gate_preview__";

@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 GRID_W = 400
 GRID_H = 225
-PORTAL_SNAP_DIST = 0.024
+PORTAL_SNAP_DIST = 0.011
 PORTAL_VIRTUAL_WALL_EXTEND = 0.006
 
 

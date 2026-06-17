@@ -1427,7 +1427,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.7.1"></script>
+<script src="/static/dash/access-control.js?v=3.7.2"></script>
 </body>
 </html>
 '''
