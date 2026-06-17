@@ -35,7 +35,28 @@
   let portalHeadingPreview = null;
   let portalFlowFlipPreview = null;
   const ACCESS_LAYER_KEY = "beacon_access_layers";
+  const SCANNER_SCALE_KEY = "beacon_dash_scanner_scale";
   let accessLayers = { snapPoints: true, barriers: true, zones: true, gates: true, pois: true, anchors: true };
+
+  function getScannerMarkerScale() {
+    const raw = Number(localStorage.getItem(SCANNER_SCALE_KEY));
+    if (!Number.isFinite(raw)) return 0.72;
+    return Math.max(0.5, Math.min(1.3, raw / 100));
+  }
+
+  function applyScannerMarkerScale(pct) {
+    const scale = Math.max(0.5, Math.min(1.3, (Number(pct) || 72) / 100));
+    document.documentElement.style.setProperty("--dash-scanner-scale", String(scale));
+    const label = document.getElementById("dashScannerScaleValue");
+    if (label) label.textContent = `${Math.round(scale * 100)}%`;
+    const slider = document.getElementById("dashScannerScale");
+    if (slider && document.activeElement !== slider) slider.value = String(Math.round(scale * 100));
+  }
+
+  function refreshGateSnapGraphics() {
+    if (typeof drawAccessLayers === "function") drawAccessLayers();
+    if (typeof decorateGateMarkers === "function") decorateGateMarkers();
+  }
 
   function loadAccessLayerPrefs() {
     try {
@@ -96,21 +117,55 @@
 
     const gateSelected =
       typeof selectedKind !== "undefined" && selectedKind === "gate" && typeof selectedId !== "undefined" && selectedId;
+    const newGateSelected = typeof selectedKind !== "undefined" && selectedKind === "newGate";
     const gate = gateSelected ? (getDashGates() || []).find((g) => g.id === selectedId) : null;
+    const previewGate = newGateSelected ? getNewGatePreview() : null;
+    const activeGate = gate || previewGate;
 
     if (orient) {
-      orient.classList.toggle("hidden", !gate);
-      if (gate) {
+      orient.classList.toggle("hidden", !activeGate);
+      if (activeGate) {
         const title = document.getElementById("accessPortalOrientTitle");
         const deg = document.getElementById("accessPortalOrientDeg");
         const slider = document.getElementById("mapPortalFenceHeading");
-        const heading = Math.round(gateFenceHeading(gate));
-        if (title) title.textContent = `${gate.name || "Scanner"} — fence heading`;
+        const heading = Math.round(gateFenceHeading(activeGate));
+        if (title) {
+          title.textContent = previewGate
+            ? "New scanner — fence heading"
+            : `${activeGate.name || "Scanner"} — fence heading`;
+        }
         if (deg) deg.textContent = `${heading}°`;
         if (slider && document.activeElement !== slider) slider.value = String(heading);
         syncPortalFlowFlipButton(gate);
       }
     }
+  }
+
+  function getNewGatePreview() {
+    if (typeof selectedKind === "undefined" || selectedKind !== "newGate") return null;
+    const mx = parseFloat(document.getElementById("newGateMapX")?.value);
+    const my = parseFloat(document.getElementById("newGateMapY")?.value);
+    if (!Number.isFinite(mx) || !Number.isFinite(my)) return null;
+    const heading = parseInt(
+      document.getElementById("mapPortalFenceHeading")?.value ||
+        document.getElementById("newGateFenceHeading")?.value ||
+        "0",
+      10
+    );
+    return {
+      id: "__new_gate_preview__",
+      name: document.getElementById("newGateName")?.value || "New scanner",
+      map_x: mx,
+      map_y: my,
+      fence_heading_deg: heading,
+    };
+  }
+
+  function gatesForSnapDrawing() {
+    const list = [...(getDashGates() || [])];
+    const preview = getNewGatePreview();
+    if (preview) list.push(preview);
+    return list;
   }
 
   function setAccessLayer(key, enabled) {
@@ -236,9 +291,9 @@
     if (
       portalHeadingPreview != null &&
       typeof selectedKind !== "undefined" &&
-      selectedKind === "gate" &&
+      (selectedKind === "gate" || selectedKind === "newGate") &&
       typeof selectedId !== "undefined" &&
-      gate?.id === selectedId
+      (gate?.id === selectedId || gate?.id === "__new_gate_preview__")
     ) {
       return ((portalHeadingPreview % 360) + 360) % 360;
     }
@@ -582,8 +637,17 @@
 
     if (accessLayers.snapPoints || accessLayers.gates) {
       drawPortalSnapLayers(svg);
-    } else if (typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId) {
-      drawPortalSnapLayers(svg, selectedId);
+    } else if (
+      (typeof selectedKind !== "undefined" && (selectedKind === "gate" || selectedKind === "newGate")) ||
+      accessTool === "drawBarrier"
+    ) {
+      const onlyId =
+        selectedKind === "gate"
+          ? selectedId
+          : selectedKind === "newGate"
+            ? "__new_gate_preview__"
+            : null;
+      drawPortalSnapLayers(svg, onlyId);
     }
   }
 
@@ -628,27 +692,60 @@
   }
 
   function gateMarkerHalfPx(gate) {
+    const scale = getScannerMarkerScale();
     const t = String(gate?.device_type || gate?.deviceType || "scanner").toLowerCase();
-    if (t === "handheld") return { w: 7, h: 11 };
-    if (t === "ipad") return { w: 11, h: 8 };
-    return { w: 12, h: 6 };
+    if (t === "handheld") return { w: 7 * scale, h: 11 * scale };
+    if (t === "ipad") return { w: 11 * scale, h: 8 * scale };
+    return { w: 12 * scale, h: 6 * scale };
+  }
+
+  function drawPortalFenceSnapGraphics(svg, gate, pair, isSelected) {
+    const fence = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    fence.setAttribute("x1", String(pair.a.x * SVG_W));
+    fence.setAttribute("y1", String(pair.a.y * SVG_H));
+    fence.setAttribute("x2", String(pair.b.x * SVG_W));
+    fence.setAttribute("y2", String(pair.b.y * SVG_H));
+    fence.setAttribute("class", "gateFenceLine");
+    fence.setAttribute("stroke", isSelected ? "#6df7a7" : "#64b5f6");
+    fence.setAttribute("stroke-width", isSelected ? "3" : "2.5");
+    svg.appendChild(fence);
+
+    [pair.a, pair.b].forEach((pt) => {
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", String(pt.x * SVG_W));
+      dot.setAttribute("cy", String(pt.y * SVG_H));
+      dot.setAttribute("r", isSelected ? "5" : "4");
+      dot.setAttribute("class", `gateSnapSvgDot${isSelected ? " selected" : ""}`);
+      svg.appendChild(dot);
+    });
   }
 
   function decorateGateMarkers() {
     document.querySelectorAll(".marker.gate .gateSnapDot").forEach((d) => d.remove());
-    const show = accessLayers.snapPoints || accessTool === "drawBarrier";
+    const gateSelected =
+      typeof selectedKind !== "undefined" && selectedKind === "gate" && typeof selectedId !== "undefined" && selectedId;
+    const newGateSelected = typeof selectedKind !== "undefined" && selectedKind === "newGate";
+    const show =
+      accessLayers.snapPoints || accessTool === "drawBarrier" || gateSelected || newGateSelected;
     if (!show) return;
 
-    (getDashGates() || []).forEach((gate) => {
-      const el = document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
-      if (!el) return;
+    gatesForSnapDrawing().forEach((gate) => {
+      if (gate.id === "__new_gate_preview__" && !newGateSelected) return;
+      const el =
+        gate.id === "__new_gate_preview__"
+          ? null
+          : document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
+      if (gate.id !== "__new_gate_preview__" && !el) return;
       const pair = getPortalSnapPair(gate);
       if (!pair) return;
       const { ux, uy } = headingUnitRad(pair.heading);
       const half = gateMarkerHalfPx(gate);
       const edge = Math.max(half.w, half.h) * 0.9;
       const isSelected =
-        typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId === gate.id;
+        (typeof selectedKind !== "undefined" && selectedKind === "gate" && selectedId === gate.id) ||
+        gate.id === "__new_gate_preview__";
+
+      if (gate.id === "__new_gate_preview__") return;
 
       [
         { side: "a", pt: pair.a, sign: -1 },
@@ -678,12 +775,19 @@
   function drawPortalSnapLayers(svg, onlyGateId) {
     const selectedGateId =
       typeof selectedKind !== "undefined" && selectedKind === "gate" ? selectedId : null;
-    (getDashGates() || []).forEach((gate) => {
+    const previewGate = getNewGatePreview();
+    const showAllSnaps = accessLayers.snapPoints || accessTool === "drawBarrier";
+
+    gatesForSnapDrawing().forEach((gate) => {
       if (onlyGateId && gate.id !== onlyGateId) return;
       const pair = getPortalSnapPair(gate);
       if (!pair) return;
-      const isSelected = gate.id === selectedGateId;
+      const isSelected =
+        gate.id === selectedGateId || gate.id === "__new_gate_preview__" || gate.id === onlyGateId;
+      const showSnap = showAllSnaps || isSelected;
       const showFlow = accessLayers.snapPoints || accessLayers.gates || isSelected;
+
+      if (showSnap) drawPortalFenceSnapGraphics(svg, gate, pair, isSelected);
 
       if (accessTool === "drawBarrier") {
         [pair.a, pair.b].forEach((pt) => {
@@ -706,7 +810,9 @@
         });
       }
 
-      if (showFlow) drawPortalFlowArrow(svg, gate, pair, isSelected);
+      if (showFlow && gate.id !== "__new_gate_preview__") {
+        drawPortalFlowArrow(svg, gate, pair, isSelected);
+      }
     });
   }
 
@@ -1048,8 +1154,34 @@
     portalHeadingPreview = null;
     portalFlowFlipPreview = null;
     updateAccessMapPanel();
-    drawAccessLayers();
+    refreshGateSnapGraphics();
     setStatus("Reset scanner orientation preview to saved values.");
+  };
+
+  function syncFenceHeadingControls(heading) {
+    const h = Math.round(Number(heading) || 0);
+    const deg = document.getElementById("accessPortalOrientDeg");
+    if (deg) deg.textContent = `${h}°`;
+    const sidebar = document.getElementById("mapPortalFenceHeading");
+    if (sidebar && document.activeElement !== sidebar) sidebar.value = String(h);
+    const editSlider = document.getElementById("editGateFenceHeading");
+    if (editSlider && document.activeElement !== editSlider) editSlider.value = String(h);
+    const editDeg = document.getElementById("editGateFenceHeadingDeg");
+    if (editDeg) editDeg.textContent = `${h}°`;
+    const newSlider = document.getElementById("newGateFenceHeading");
+    if (newSlider && document.activeElement !== newSlider) newSlider.value = String(h);
+  }
+
+  window.syncGateFenceHeadingPreview = function (val) {
+    portalHeadingPreview = Number(val);
+    syncFenceHeadingControls(portalHeadingPreview);
+    refreshGateSnapGraphics();
+  };
+
+  window.syncNewGateFenceHeadingPreview = function (val) {
+    portalHeadingPreview = Number(val);
+    syncFenceHeadingControls(portalHeadingPreview);
+    refreshGateSnapGraphics();
   };
 
   window.togglePortalFlowFlip = function () {
@@ -1082,7 +1214,7 @@
     portalFlowFlipPreview = null;
     renderAccessLists();
     updateAccessMapPanel();
-    drawAccessLayers();
+    refreshGateSnapGraphics();
     setStatus(`Saved scanner orientation (heading ${heading}°, flow ${flowFlipped ? "flipped" : "normal"}).`);
   };
 
@@ -1291,9 +1423,20 @@
     if (mapHeadingSlider) {
       mapHeadingSlider.addEventListener("input", () => {
         portalHeadingPreview = Number(mapHeadingSlider.value);
-        const deg = document.getElementById("accessPortalOrientDeg");
-        if (deg) deg.textContent = `${Math.round(portalHeadingPreview)}°`;
-        drawAccessLayers();
+        syncFenceHeadingControls(portalHeadingPreview);
+        refreshGateSnapGraphics();
+      });
+    }
+
+    const scaleSlider = document.getElementById("dashScannerScale");
+    const savedScale = Math.round(getScannerMarkerScale() * 100);
+    applyScannerMarkerScale(savedScale);
+    if (scaleSlider) {
+      scaleSlider.value = String(savedScale);
+      scaleSlider.addEventListener("input", () => {
+        const pct = Number(scaleSlider.value);
+        applyScannerMarkerScale(pct);
+        localStorage.setItem(SCANNER_SCALE_KEY, String(pct));
       });
     }
 
