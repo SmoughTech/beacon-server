@@ -30,10 +30,10 @@ def find_map_url(base_name: str) -> str:
     Returns the first existing static map URL for a base filename.
 
     This lets Dash work with any of these files:
-        static/maps/lib_map.png
-        static/maps/lib_map.jpg
-        static/maps/lib_map.jpeg
-        static/maps/lib_map.webp
+        static/maps/test_event_map.png
+        static/maps/test_event_map.jpg
+        static/maps/test_event_map.jpeg
+        static/maps/test_event_map.webp
 
     The important part is that the base name stays consistent.
     """
@@ -74,33 +74,13 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-BUILT_IN_POIS = [
-    {"id": "medical", "name": "Medical", "category": "Services & Amenities", "map_x": 0.57, "map_y": 0.64},
-    {"id": "restrooms", "name": "Restrooms", "category": "Services & Amenities", "map_x": 0.51, "map_y": 0.62},
-    {"id": "water", "name": "Water Stations", "category": "Services & Amenities", "map_x": 0.46, "map_y": 0.56},
-    {"id": "guest_services", "name": "Guest Services", "category": "Services & Amenities", "map_x": 0.63, "map_y": 0.73},
-    {"id": "info_lost_found", "name": "Info + Lost & Found", "category": "Services & Amenities", "map_x": 0.55, "map_y": 0.58},
+DEFAULT_EVENT_ID = "test_event"
 
-    {"id": "lightning", "name": "Lightning", "category": "Stages", "map_x": 0.36, "map_y": 0.42},
-    {"id": "thunder", "name": "Thunder", "category": "Stages", "map_x": 0.55, "map_y": 0.42},
-    {"id": "junkyard", "name": "Junkyard", "category": "Stages", "map_x": 0.43, "map_y": 0.36},
-    {"id": "woogie", "name": "Woogie", "category": "Stages", "map_x": 0.57, "map_y": 0.76},
-    {"id": "stacks", "name": "Stacks", "category": "Stages", "map_x": 0.48, "map_y": 0.74},
-    {"id": "grand_artique", "name": "Grand Artique", "category": "Stages", "map_x": 0.42, "map_y": 0.66},
-    {"id": "lighthouse", "name": "Lighthouse & Moon Room", "category": "Stages", "map_x": 0.48, "map_y": 0.68},
-
-    {"id": "sunset_plaza", "name": "Sunset Plaza", "category": "Plazas", "map_x": 0.18, "map_y": 0.38},
-    {"id": "high_noon_plaza", "name": "High Noon Plaza", "category": "Plazas", "map_x": 0.51, "map_y": 0.20},
-    {"id": "sunrise_plaza", "name": "Sunrise Plaza", "category": "Plazas", "map_x": 0.80, "map_y": 0.44},
-
-    {"id": "atlaswyld_entrance", "name": "Atlaswyld Entrance", "category": "Entrances", "map_x": 0.69, "map_y": 0.80},
-    {"id": "box_office", "name": "To Box Office", "category": "Entrances", "map_x": 0.86, "map_y": 0.10},
-    {"id": "main_entrance", "name": "Main Entrance", "category": "Entrances", "map_x": 0.50, "map_y": 0.87},
-]
+BUILT_IN_POIS: list[dict] = []
 
 
 class PoiCreate(BaseModel):
-    event_id: Optional[str] = Field(default="lib_2026", max_length=80)
+    event_id: Optional[str] = Field(default=DEFAULT_EVENT_ID, max_length=80)
     name: str = Field(min_length=1, max_length=120)
     category: str = Field(default="Custom POIs", max_length=120)
     map_x: float = Field(ge=0.0, le=1.0)
@@ -575,7 +555,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS pois (
                 id TEXT PRIMARY KEY,
-                event_id TEXT NOT NULL DEFAULT 'lib_2026',
+                event_id TEXT NOT NULL DEFAULT 'test_event',
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
                 map_x REAL NOT NULL,
@@ -833,7 +813,7 @@ def init_db():
             conn.execute("ALTER TABLE pois ADD COLUMN gps_source TEXT")
 
         if "event_id" not in existing_columns:
-            conn.execute("ALTER TABLE pois ADD COLUMN event_id TEXT NOT NULL DEFAULT 'lib_2026'")
+            conn.execute("ALTER TABLE pois ADD COLUMN event_id TEXT NOT NULL DEFAULT 'test_event'")
 
         conn.execute(
             """
@@ -852,13 +832,14 @@ def init_db():
                 INSERT INTO pois (
                     id, event_id, name, category, map_x, map_y, is_custom
                 )
-                VALUES (?, 'lib_2026', ?, ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     category = excluded.category
                 """,
                 (
                     poi["id"],
+                    DEFAULT_EVENT_ID,
                     poi["name"],
                     poi["category"],
                     poi["map_x"],
@@ -1053,8 +1034,12 @@ def health():
 
 
 EVENTS = [
-    {"id": "lib_2026", "name": "LIB '26", "map_name": "lib_map", "description": "LIB event map and POI set."},
-    {"id": "freedom_250", "name": "Freedom 250", "map_name": "f250_map", "description": "Freedom 250 White House field test event."},
+    {
+        "id": "test_event",
+        "name": "Test Event",
+        "map_name": "test_event_map",
+        "description": "Blank test event for SiteOps, scanners, and map tooling.",
+    },
 ]
 
 
@@ -1263,7 +1248,7 @@ document.getElementById('mapWrap').addEventListener('mousemove',handleMapEdgeScr
 document.getElementById('mapWrap').addEventListener('mouseleave',stopEdgeScroll);
 document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='moveGate'&&selectedKind==='gate'){document.getElementById('editGateMapX').value=p.x.toFixed(4); document.getElementById('editGateMapY').value=p.y.toFixed(4); setStatus('Scanner map position updated in editor. Click Save Scanner.');} if(mapClickMode==='newGate'){document.getElementById('newGateMapX').value=p.x.toFixed(4); document.getElementById('newGateMapY').value=p.y.toFixed(4); setStatus('New scanner map position set. Click Create Scanner.');} if(mapClickMode==='newPoi'){document.getElementById('newPoiMapX').value=p.x.toFixed(4); document.getElementById('newPoiMapY').value=p.y.toFixed(4); setStatus('New POI map position set. Click Create POI.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} mapClickMode=null;});
 function updateSurveyInfo(){document.getElementById('rsMapInfo').textContent=`Start: ${remoteSurveyStart?remoteSurveyStart.x.toFixed(4)+', '+remoteSurveyStart.y.toFixed(4):'not set'} • End: ${remoteSurveyEnd?remoteSurveyEnd.x.toFixed(4)+', '+remoteSurveyEnd.y.toFixed(4):'not set'}`}
-async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent((events.find(ev=>ev.id==='freedom_250')||events[0]||{id:'freedom_250'}).id);}
+async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent((events.find(ev=>ev.id==='test_event')||events[0]||{id:'test_event'}).id);}
 async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const stage=getMapStage(); stage.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.src=currentEvent.map_url; img.style.opacity=(mapOpacity/100).toFixed(2); img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; stage.prepend(ph)}; stage.prepend(img); setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); selectedKind=null; selectedId=null; await refreshAll();}
 async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/scanners`),api(`/events/${currentEvent.id}/calibration-anchors`)]); try{surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`)}catch(e){surveyPaths=[]} try{deviceSweeps=await api(`/events/${currentEvent.id}/device-map-sweeps`)}catch(e){deviceSweeps=[]} drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
 function selectPoi(id){setSelected('poi',id); setTab('data', false); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}
@@ -1670,7 +1655,7 @@ def get_pois():
             """
             SELECT *
             FROM pois
-            WHERE event_id = 'lib_2026'
+            WHERE event_id = ?
             ORDER BY
                 CASE category
                     WHEN 'Services & Amenities' THEN 1
@@ -1681,7 +1666,8 @@ def get_pois():
                     ELSE 6
                 END,
                 name COLLATE NOCASE ASC
-            """
+            """,
+            (DEFAULT_EVENT_ID,),
         ).fetchall()
 
     return [row_to_dict(row) for row in rows]
@@ -1692,7 +1678,7 @@ def get_poi(poi_id: str):
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM pois WHERE id = ? AND event_id = ?",
-            (poi_id, "lib_2026"),
+            (poi_id, DEFAULT_EVENT_ID),
         ).fetchone()
 
     if row is None:
@@ -1721,7 +1707,7 @@ def create_poi(payload: PoiCreate):
             """,
             (
                 poi_id,
-                payload.event_id or "lib_2026",
+                payload.event_id or DEFAULT_EVENT_ID,
                 payload.name,
                 payload.category or "Custom POIs",
                 payload.map_x,
