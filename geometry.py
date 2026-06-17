@@ -185,6 +185,7 @@ def build_scanner_graph(
                     "from": from_id,
                     "to": to_id,
                     "via_scanner": via,
+                    "via_portal": via,
                     "allowed_classes": allowed,
                 }
             )

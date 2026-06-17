@@ -57,7 +57,7 @@ Derived from scanner access fields on gate records:
 }
 ```
 
-Legacy clients may still see duplicate keys `gates`, `portal_graph`, and `via_portal` for backward compatibility.
+Legacy clients may still see duplicate keys `gates`, `portal_graph`, and `via_portal` for backward compatibility. Edges include both `via_scanner` and `via_portal` (same gate id).
 
 ## Full response shape
 
