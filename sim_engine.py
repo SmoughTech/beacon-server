@@ -143,6 +143,7 @@ class CrowdSimEngine:
         self.spawn_cursor = 0
         self.spawn_cooldown = 0
         self.stats = {"spawned": 0, "scanned": 0, "idle": 0}
+        self.warnings: list[str] = []
 
         self._spawn_tiles = self._collect_spawn_tiles()
 
@@ -162,6 +163,7 @@ class CrowdSimEngine:
         self.spawn_plan = ["ga"] * ga_count + ["vip"] * vip_count
         self.spawn_cursor = 0
         self.spawn_cooldown = 0
+        self.warnings: list[str] = []
 
     def reset(self, ga_count: int = 20, vip_count: int = 0, spawn_interval: int = 15) -> None:
         self.agents.clear()
@@ -169,6 +171,13 @@ class CrowdSimEngine:
         self.tick = 0
         self.stats = {"spawned": 0, "scanned": 0, "idle": 0}
         self.configure_spawns(ga_count, vip_count, spawn_interval)
+        self.warnings = self.spawn_diagnostics()
+        if self.spawn_plan:
+            if self.spawn_one(self.spawn_plan[0]):
+                self.spawn_cursor = 1
+                self.spawn_cooldown = spawn_interval
+            elif not self.warnings:
+                self.warnings.append("Could not spawn guest — check zones and walkable area.")
 
     def passable(self, tx: int, ty: int) -> bool:
         if tx < 0 or ty < 0 or tx >= TILE_COLS or ty >= TILE_ROWS:
@@ -238,10 +247,22 @@ class CrowdSimEngine:
         return path
 
     def zone_for_class(self, ticket_class: str) -> dict[str, Any] | None:
+        tc = ticket_class.strip().lower()
         for zone in self.zones:
-            if zone.get("zone_class") == ticket_class:
+            zc = (zone.get("zone_class") or "ga").strip().lower()
+            if zc == tc:
                 return zone
-        return None
+        return self.zones[0] if self.zones else None
+
+    def spawn_diagnostics(self) -> list[str]:
+        warnings: list[str] = []
+        if not self.zones:
+            warnings.append("No zones — use Fill Zone in Access Control.")
+        if not self.gates:
+            warnings.append("No scanners placed.")
+        if not self._spawn_tiles:
+            warnings.append("No walkable spawn tiles outside zones.")
+        return warnings
 
     def pick_gate(self, ticket_class: str, target_zone_id: str | None, from_tx: int, from_ty: int) -> dict[str, Any] | None:
         best: tuple[int, dict[str, Any]] | None = None
@@ -268,12 +289,12 @@ class CrowdSimEngine:
             return tiles[-1]
         return gx, gy
 
-    def spawn_one(self, ticket_class: str) -> None:
+    def spawn_one(self, ticket_class: str) -> bool:
         zone = self.zone_for_class(ticket_class)
         if not zone:
-            return
+            return False
         if not self._spawn_tiles:
-            return
+            return False
         idx = (self.next_agent_id * 17) % len(self._spawn_tiles)
         tx, ty = self._spawn_tiles[idx]
         occ = self.occupancy()
@@ -283,7 +304,7 @@ class CrowdSimEngine:
             idx = (idx + 1) % len(self._spawn_tiles)
             tx, ty = self._spawn_tiles[idx]
         else:
-            return
+            return False
 
         gate = self.pick_gate(ticket_class, zone["id"], tx, ty)
         gate_id = gate["id"] if gate else None
@@ -306,6 +327,7 @@ class CrowdSimEngine:
         self.agents.append(agent)
         self.next_agent_id += 1
         self.stats["spawned"] += 1
+        return True
 
     def pick_area_tile(self, zone_id: str, agent_id: int) -> tuple[int, int] | None:
         zone = self.zones_by_id.get(zone_id)
@@ -425,8 +447,8 @@ class CrowdSimEngine:
         if self.spawn_cursor < len(self.spawn_plan):
             self.spawn_cooldown -= 1
             if self.spawn_cooldown <= 0:
-                self.spawn_one(self.spawn_plan[self.spawn_cursor])
-                self.spawn_cursor += 1
+                if self.spawn_one(self.spawn_plan[self.spawn_cursor]):
+                    self.spawn_cursor += 1
                 self.spawn_cooldown = self.spawn_interval
 
         occ = self.occupancy()
@@ -442,6 +464,8 @@ class CrowdSimEngine:
             "event_id": self.event_id,
             "tick": self.tick,
             "stats": self.stats,
+            "warnings": getattr(self, "warnings", []),
+            "spawn_remaining": max(0, len(self.spawn_plan) - self.spawn_cursor),
             "agents": [
                 {
                     "id": a.id,

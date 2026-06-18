@@ -1315,7 +1315,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',sim:'Crowd Sim',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(typeof onSimTabChange==='function')onSimTabChange(tab); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout(); if(tab==='sim'&&typeof loadSimPanel==='function')loadSimPanel();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',sim:'Crowd Sim',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(typeof onSimTabChange==='function')onSimTabChange(tab); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout(); if(tab==='sim'&&typeof loadSimPanel==='function')loadSimPanel(); drawBase();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId)){el.classList.add('selected'); if(dashSearchMatches.length)el.classList.add('searchHit');} el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} getMapStage().appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -1513,8 +1513,8 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.13.4"></script>
-<script src="/static/dash/crowd-sim.js?v=1.0.0"></script>
+<script src="/static/dash/access-control.js?v=3.14.0"></script>
+<script src="/static/dash/crowd-sim.js?v=1.1.0"></script>
 </body>
 </html>
 '''

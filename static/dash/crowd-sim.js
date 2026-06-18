@@ -9,6 +9,8 @@
   let simTimer = null;
   let simAgents = [];
   let simStats = {};
+  let simWarnings = [];
+  let simSpawnRemaining = 0;
   let simTick = 0;
   let simSvg = null;
 
@@ -55,6 +57,18 @@
     if (simSvg) simSvg.innerHTML = "";
   }
 
+  async function refreshSimMap() {
+    if (typeof loadGates === "function") {
+      await loadGates();
+    }
+    if (typeof loadAccessLayout === "function") {
+      await loadAccessLayout();
+    }
+    if (typeof drawBase === "function") drawBase();
+    else if (typeof drawAccessLayers === "function") drawAccessLayers();
+    drawSimAgents();
+  }
+
   function drawSimAgents() {
     if (typeof currentTab !== "undefined" && currentTab !== "sim") {
       clearSimSvg();
@@ -75,16 +89,19 @@
       circle.setAttribute("stroke-width", "0.6");
       svg.appendChild(circle);
     }
-    if (simSvg && simSvg.parentNode) {
-      simSvg.parentNode.appendChild(simSvg);
-    }
+    const stage = document.getElementById("mapStage");
+    if (simSvg && stage) stage.appendChild(simSvg);
   }
 
   function updateSimStats() {
     const el = document.getElementById("simStats");
     if (!el) return;
     const s = simStats || {};
-    el.textContent = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • idle ${s.idle || 0} • active ${simAgents.length}`;
+    let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • idle ${s.idle || 0} • on map ${simAgents.length}`;
+    if (simWarnings.length) {
+      text += " • ⚠ " + simWarnings.join(" ");
+    }
+    el.textContent = text;
   }
 
   async function simReset() {
@@ -97,6 +114,7 @@
     const vip = parseInt(document.getElementById("simVipCount")?.value || "0", 10);
     const spawnInterval = parseInt(document.getElementById("simSpawnInterval")?.value || "12", 10);
     try {
+      await refreshSimMap();
       const data = await api(`/events/${eventId}/sim/reset`, {
         method: "POST",
         body: JSON.stringify({
@@ -106,7 +124,11 @@
         }),
       });
       applySimState(data);
-      setStatus(`Sim reset: ${ga} GA + ${vip} VIP queued to spawn.`);
+      if ((data.stats?.spawned || 0) === 0 && (data.warnings || []).length) {
+        setStatus("Sim reset: " + data.warnings.join(" "));
+      } else {
+        setStatus(`Sim reset: ${data.stats?.spawned || 0} guest(s) on map, ${data.spawn_remaining || 0} queued.`);
+      }
     } catch (e) {
       setStatus("Sim reset failed: " + e.message);
     }
@@ -117,6 +139,7 @@
     if (!eventId) return;
     try {
       const data = await api(`/events/${eventId}/sim/reload`, { method: "POST" });
+      await refreshSimMap();
       applySimState(data);
       setStatus("Sim layout reloaded from database.");
     } catch (e) {
@@ -137,7 +160,9 @@
   function applySimState(data) {
     simAgents = data.agents || [];
     simStats = data.stats || {};
+    simWarnings = data.warnings || [];
     simTick = data.tick || 0;
+    simSpawnRemaining = data.spawn_remaining || 0;
     updateSimStats();
     drawSimAgents();
   }
@@ -153,6 +178,10 @@
   }
 
   function simStart() {
+    if (!simAgents.length && !simSpawnRemaining && !(simStats.spawned || 0)) {
+      setStatus("Click Reset & Spawn first.");
+      return;
+    }
     simPlaying = true;
     const btn = document.getElementById("simPlayBtn");
     if (btn) btn.textContent = "Pause";
@@ -176,38 +205,31 @@
       clearSimSvg();
       return;
     }
-    drawSimAgents();
+    refreshSimMap().catch(() => {});
   }
 
   async function loadSimPanel() {
     const eventId = getEventId();
     if (!eventId) return;
+    await refreshSimMap();
     try {
       const data = await api(`/events/${eventId}/sim/state`);
       applySimState(data);
     } catch (e) {
       setStatus("Could not load sim state.");
     }
-    drawSimAgents();
   }
 
   function installCrowdSim() {
-    if (typeof drawBase === "function") {
-      const origDraw = drawBase;
-      drawBase = function () {
-        origDraw();
-        drawSimAgents();
-      };
+    if (typeof drawBase !== "function") {
+      setTimeout(installCrowdSim, 100);
+      return;
     }
-    if (typeof clearOverlay === "function") {
-      const origClear = clearOverlay;
-      clearOverlay = function () {
-        origClear();
-        if (typeof currentTab === "undefined" || currentTab !== "sim") {
-          clearSimSvg();
-        }
-      };
-    }
+    const origDraw = drawBase;
+    drawBase = function () {
+      origDraw();
+      drawSimAgents();
+    };
   }
 
   window.simReset = simReset;
@@ -215,6 +237,8 @@
   window.simTogglePlay = simTogglePlay;
   window.loadSimPanel = loadSimPanel;
   window.onSimTabChange = onSimTabChange;
+  window.drawSimAgents = drawSimAgents;
+  window.refreshSimMap = refreshSimMap;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", installCrowdSim);

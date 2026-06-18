@@ -24,6 +24,10 @@
     vendor: "rgba(255,152,0,0.38)",
   };
 
+  function showsAccessMapLayers() {
+    return typeof currentTab !== "undefined" && (currentTab === "access" || currentTab === "sim");
+  }
+
   const ZONE_PRESETS = [
     { name: "GA Green", color: "#4caf50", opacity: 38 },
     { name: "VIP Gold", color: "#ffc107", opacity: 40 },
@@ -2011,7 +2015,7 @@
     accessSimLocations = await api(`/events/${eventId}/sim-locations`);
     renderAccessLists();
     syncAccessToolPanels();
-    if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
+    if (showsAccessMapLayers()) drawAccessLayers();
   }
 
   function setAccessTool(tool) {
@@ -2081,7 +2085,7 @@
     renderWorkLocationSection();
     updateAccessMapPanel();
     if (typeof drawBase === "function") drawBase();
-    if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
+    if (showsAccessMapLayers()) drawAccessLayers();
   }
 
   function renderAccessLists() {
@@ -2816,7 +2820,7 @@
     const origClear = clearOverlay;
     clearOverlay = function () {
       origClear();
-      if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
+      if (showsAccessMapLayers()) drawAccessLayers();
       else clearAccessOverlay();
     };
 
@@ -2824,14 +2828,18 @@
     drawBase = function () {
       origDraw();
       applyAccessLayerVisibility();
-      if (typeof currentTab !== "undefined" && currentTab === "access") {
-        decorateGateMarkers();
-        decorateGateDragHandles();
-        drawSimLocationMarkers();
+      if (showsAccessMapLayers()) {
+        if (currentTab === "access") {
+          decorateGateMarkers();
+          decorateGateDragHandles();
+          drawSimLocationMarkers();
+        }
         drawAccessLayers();
         const svg = document.getElementById("zoneSvg");
         const stage = getMapStage();
         if (svg && stage) stage.appendChild(svg);
+        const simSvg = document.getElementById("simAgentSvg");
+        if (simSvg && stage) stage.appendChild(simSvg);
       }
     };
 
@@ -2851,6 +2859,17 @@
           loadAccessLayout().then(finish);
         } else {
           finish();
+        }
+      } else if (tab === "sim") {
+        const finishSimMap = () => {
+          if (typeof drawBase === "function") drawBase();
+          drawAccessLayers();
+          if (typeof window.drawSimAgents === "function") window.drawSimAgents();
+        };
+        if (autoLoad !== false) {
+          loadAccessLayout().then(finishSimMap);
+        } else {
+          finishSimMap();
         }
       }
     };
@@ -3050,6 +3069,7 @@
 
   window.renderPortalEditor = renderPortalEditor;
   window.loadAccessLayout = loadAccessLayout;
+  window.drawAccessLayers = drawAccessLayers;
   window.setAccessTool = setAccessTool;
   installAccessControl();
 })();
