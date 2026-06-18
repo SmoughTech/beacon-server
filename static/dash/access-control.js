@@ -462,6 +462,16 @@
     return !!(gate?.portal_flow_flipped ?? gate?.portalFlowFlipped);
   }
 
+  function isGateOnBarrier(gate) {
+    return !!(gate?.barrier_id) && gate?.barrier_segment_index != null;
+  }
+
+  function portalFenceLineHeading(gate) {
+    const fence = gateFenceHeading(gate);
+    if (isGateOnBarrier(gate)) return (fence + 90) % 360;
+    return fence;
+  }
+
   function getPortalFlowHeading(gate) {
     const fence = gateFenceHeading(gate);
     const flipped = gateFlowFlipped(gate);
@@ -477,7 +487,7 @@
     const cx = gate?.map_x ?? gate?.mapX;
     const cy = gate?.map_y ?? gate?.mapY;
     if (cx == null || cy == null) return null;
-    const heading = gateFenceHeading(gate);
+    const heading = portalFenceLineHeading(gate);
     const { ux, uy } = headingUnitRad(heading);
     return {
       gateId: gate.id,
@@ -1082,7 +1092,7 @@
       return {
         map_x: hit.x,
         map_y: hit.y,
-        fence_heading_deg: Math.round(fenceCrossingHeadingDeg(hit.a, hit.b)),
+        fence_heading_deg: Math.round(segmentTangentHeadingDeg(hit.a, hit.b)),
         barrier_id: hit.barrier_id,
         barrier_segment_index: hit.segIndex,
         barrier_segment_t: hit.t,
@@ -1743,7 +1753,14 @@
 
   window.savePortalAccess = async function () {
     if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
+    const gate = (getDashGates() || []).find((g) => g.id === selectedId);
+    if (!gate) return;
     const allowed = [...document.querySelectorAll(".portalClass:checked")].map((el) => el.value);
+    const barrierDropdown = document.getElementById("portalBarrier")?.value || "";
+    const headingEl = document.getElementById("mapPortalFenceHeading");
+    const fenceHeadingDeg = headingEl
+      ? parseInt(headingEl.value || "0", 10)
+      : Number(gate.fence_heading_deg ?? gate.fenceHeadingDeg ?? 0);
     const updated = await api(
       `/events/${getDashEvent().id}/scanners/${selectedId}/access`,
       {
@@ -1751,16 +1768,26 @@
         body: JSON.stringify({
           zone_a_id: document.getElementById("portalZoneA").value || null,
           zone_b_id: document.getElementById("portalZoneB").value || null,
-          barrier_id: document.getElementById("portalBarrier").value || null,
+          barrier_id: barrierDropdown || gate.barrier_id || null,
           direction: document.getElementById("portalDirection").value,
           allowed_classes: allowed,
+          map_x: gate.map_x ?? gate.mapX,
+          map_y: gate.map_y ?? gate.mapY,
+          fence_heading_deg: fenceHeadingDeg,
+          barrier_segment_index: gate.barrier_segment_index ?? null,
+          barrier_segment_t: gate.barrier_segment_t ?? null,
           updated_by: "dash_access",
         }),
       }
     );
     const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
     if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
+    portalHeadingPreview = null;
+    portalFlowFlipPreview = null;
+    syncFenceHeadingControls(updated.fence_heading_deg ?? updated.fenceHeadingDeg ?? fenceHeadingDeg);
     renderAccessLists();
+    updateAccessMapPanel();
+    refreshGateSnapGraphics();
     if (typeof drawBase === "function") drawBase();
     setStatus("Saved scanner access rules.");
   };

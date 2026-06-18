@@ -58,7 +58,7 @@ def test_scanner_on_barrier_creates_walkable_gap():
             "id": "gate_1",
             "map_x": 0.5,
             "map_y": 0.5,
-            "fence_heading_deg": 90,
+            "fence_heading_deg": 0,
             "barrier_id": "b1",
             "barrier_segment_index": 0,
             "barrier_segment_t": 0.5,

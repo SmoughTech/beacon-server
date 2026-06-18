@@ -32,12 +32,23 @@ def gate_fence_heading(gate: dict[str, Any]) -> float:
     return float(raw) % 360
 
 
+def gate_on_barrier(gate: dict[str, Any]) -> bool:
+    return bool(gate.get("barrier_id")) and gate.get("barrier_segment_index") is not None
+
+
+def portal_fence_line_heading(gate: dict[str, Any]) -> float:
+    fence = gate_fence_heading(gate)
+    if gate_on_barrier(gate):
+        return (fence + 90.0) % 360
+    return fence
+
+
 def get_portal_snap_pair(gate: dict[str, Any]) -> dict[str, Any] | None:
     cx = gate.get("map_x", gate.get("mapX"))
     cy = gate.get("map_y", gate.get("mapY"))
     if cx is None or cy is None:
         return None
-    heading = gate_fence_heading(gate)
+    heading = portal_fence_line_heading(gate)
     ux, uy = heading_unit_rad(heading)
     cx_f, cy_f = float(cx), float(cy)
     return {

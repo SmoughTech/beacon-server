@@ -238,6 +238,9 @@ def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         allowed_classes = []
 
+    fence_heading_deg = float(row["fence_heading_deg"] if "fence_heading_deg" in keys else 0.0) % 360
+    portal_flow_flipped = bool(row["portal_flow_flipped"] if "portal_flow_flipped" in keys else 0)
+
     return {
         "zone_a_id": row["zone_a_id"] if "zone_a_id" in keys else None,
         "zone_b_id": row["zone_b_id"] if "zone_b_id" in keys else None,
@@ -246,6 +249,10 @@ def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
         "barrier_id": row["barrier_id"] if "barrier_id" in keys else None,
         "barrier_segment_index": row["barrier_segment_index"] if "barrier_segment_index" in keys else None,
         "barrier_segment_t": row["barrier_segment_t"] if "barrier_segment_t" in keys else None,
+        "fence_heading_deg": fence_heading_deg,
+        "fenceHeadingDeg": fence_heading_deg,
+        "portal_flow_flipped": portal_flow_flipped,
+        "portalFlowFlipped": portal_flow_flipped,
     }
 
 
