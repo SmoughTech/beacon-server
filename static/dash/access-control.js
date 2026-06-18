@@ -5,8 +5,9 @@
   const GRID_H = 225;
   const PORTAL_SNAP_DIST = 0.011;
   const PORTAL_SNAP_RADIUS = 0.014;
-  const BARRIER_ENDPOINT_SNAP_RADIUS = 0.014;
-  const BARRIER_SEGMENT_SNAP_RADIUS = 0.012;
+  const BARRIER_ENDPOINT_SNAP_RADIUS = 0.02;
+  const BARRIER_SEGMENT_SNAP_RADIUS = 0.018;
+  const SCANNER_FENCE_SNAP_RADIUS = 0.045;
   const PORTAL_GAP_HALF_WIDTH = 0.014;
 
   const ZONE_COLORS = {
@@ -78,6 +79,7 @@
   function refreshGateSnapGraphics() {
     if (typeof drawAccessLayers === "function") drawAccessLayers();
     if (typeof decorateGateMarkers === "function") decorateGateMarkers();
+    if (typeof decorateGateDragHandles === "function") decorateGateDragHandles();
   }
 
   function loadAccessLayerPrefs() {
@@ -487,6 +489,11 @@
     };
   }
 
+  function snapRadiusNorm(base) {
+    const scale = typeof getMapScale === "function" ? getMapScale() : 1;
+    return base / Math.max(1, scale);
+  }
+
   function iterBarrierSegments(barrier) {
     const pts = barrier?.points || [];
     if (pts.length < 2) return [];
@@ -552,28 +559,43 @@
   }
 
   function snapToExistingBarrier(p) {
+    if (!accessLayers.snapPoints && accessTool !== "drawBarrier") {
+      return { x: p.x, y: p.y, snapped: false };
+    }
+
     let best = null;
-    let bestDist = BARRIER_ENDPOINT_SNAP_RADIUS;
+    let bestDist = snapRadiusNorm(BARRIER_ENDPOINT_SNAP_RADIUS);
+
+    const considerPoint = (pt, meta) => {
+      const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: pt.x, y: pt.y, snapped: true, ...meta };
+      }
+    };
+
+    if (accessTool === "drawBarrier") {
+      draftBarrierPoints.forEach((pt, idx) => {
+        considerPoint(pt, {
+          snapKind: "draft_point",
+          pointIndex: idx,
+        });
+      });
+    }
+
     accessBarriers.forEach((barrier) => {
       (barrier.points || []).forEach((pt, idx) => {
-        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = {
-            x: pt.x,
-            y: pt.y,
-            snapped: true,
-            snapKind: "barrier_endpoint",
-            barrierId: barrier.id,
-            barrierName: barrier.name,
-            pointIndex: idx,
-          };
-        }
+        considerPoint(pt, {
+          snapKind: "barrier_endpoint",
+          barrierId: barrier.id,
+          barrierName: barrier.name,
+          pointIndex: idx,
+        });
       });
     });
     if (best) return best;
 
-    bestDist = BARRIER_SEGMENT_SNAP_RADIUS;
+    bestDist = snapRadiusNorm(BARRIER_SEGMENT_SNAP_RADIUS);
     accessBarriers.forEach((barrier) => {
       iterBarrierSegments(barrier).forEach(({ segIndex, a, b }) => {
         const proj = projectPointOnSegment(a, b, p.x, p.y);
@@ -688,9 +710,9 @@
   function addDraftBarrierPoint(p, snapInfo) {
     draftBarrierPoints.push({ x: p.x, y: p.y });
     drawAccessLayers();
-    if (snapInfo?.snapped) {
-      if (snapInfo.snapKind === "barrier_endpoint") {
-        setStatus(`Snapped to ${snapInfo.barrierName} corner (point ${draftBarrierPoints.length}).`);
+      if (snapInfo?.snapped) {
+      if (snapInfo.snapKind === "barrier_endpoint" || snapInfo.snapKind === "draft_point") {
+        setStatus(`Snapped to corner (point ${draftBarrierPoints.length}).`);
       } else if (snapInfo.snapKind === "barrier_segment") {
         setStatus(`Snapped to ${snapInfo.barrierName} edge (point ${draftBarrierPoints.length}).`);
       } else {
@@ -1051,6 +1073,150 @@
       dot.setAttribute("r", isSelected ? "5" : "4");
       dot.setAttribute("class", `gateSnapSvgDot${isSelected ? " selected" : ""}`);
       svg.appendChild(dot);
+    });
+  }
+
+  function placementFromMapPoint(gate, x, y) {
+    const hit = findNearestBarrierSegment(x, y);
+    if (hit && hit.dist <= SCANNER_FENCE_SNAP_RADIUS) {
+      return {
+        map_x: hit.x,
+        map_y: hit.y,
+        fence_heading_deg: Math.round(fenceCrossingHeadingDeg(hit.a, hit.b)),
+        barrier_id: hit.barrier_id,
+        barrier_segment_index: hit.segIndex,
+        barrier_segment_t: hit.t,
+        snapped: true,
+        barrier_name: hit.barrier_name,
+      };
+    }
+    return {
+      map_x: x,
+      map_y: y,
+      fence_heading_deg: gate?.fence_heading_deg ?? gate?.fenceHeadingDeg ?? 0,
+      barrier_id: null,
+      barrier_segment_index: null,
+      barrier_segment_t: null,
+      snapped: false,
+      barrier_name: null,
+    };
+  }
+
+  async function commitScannerPlacement(gateId, x, y) {
+    if (!getDashEvent()) return null;
+    const gate = (getDashGates() || []).find((g) => g.id === gateId);
+    if (!gate) return null;
+    const place = placementFromMapPoint(gate, x, y);
+    const allowed = gate.allowed_classes || [];
+    const updated = await api(`/events/${getDashEvent().id}/scanners/${gateId}/access`, {
+      method: "PUT",
+      body: JSON.stringify({
+        zone_a_id: gate.zone_a_id || null,
+        zone_b_id: gate.zone_b_id || null,
+        allowed_classes: allowed,
+        direction: gate.direction || "bidirectional",
+        barrier_id: place.barrier_id,
+        barrier_segment_index: place.barrier_segment_index,
+        barrier_segment_t: place.barrier_segment_t,
+        map_x: place.map_x,
+        map_y: place.map_y,
+        fence_heading_deg: place.fence_heading_deg,
+        updated_by: "dash_access",
+      }),
+    });
+    const idx = (getDashGates() || []).findIndex((g) => g.id === gateId);
+    if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
+    return { updated, place };
+  }
+
+  let gateDragState = null;
+
+  function setGateMarkerPosition(gateId, x, y) {
+    const el = document.querySelector(`.marker.gate[data-gate-id="${gateId}"]`);
+    if (!el || typeof pct !== "function") return;
+    el.style.left = pct(x);
+    el.style.top = pct(y);
+  }
+
+  function decorateGateDragHandles() {
+    document.querySelectorAll(".gateDragHandle").forEach((d) => d.remove());
+    if (!accessLayers.gates || accessTool === "drawBarrier") return;
+
+    (getDashGates() || []).forEach((gate) => {
+      const el = document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
+      if (!el) return;
+      const handle = document.createElement("span");
+      handle.className = "gateDragHandle";
+      handle.title = "Drag scanner; release on a fence to snap an entry gap";
+      handle.onpointerdown = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        gateDragState = {
+          gateId: gate.id,
+          pointerId: ev.pointerId,
+          handle,
+          marker: el,
+        };
+        handle.classList.add("dragging");
+        el.classList.add("draggingGate");
+        if (typeof setSelected === "function") setSelected("gate", gate.id);
+        handle.setPointerCapture(ev.pointerId);
+        setStatus(`Dragging ${gate.name || "scanner"}… release on a fence to snap.`);
+      };
+      handle.onpointermove = (ev) => {
+        if (!gateDragState || gateDragState.gateId !== gate.id || ev.pointerId !== gateDragState.pointerId) {
+          return;
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        const p = mapXY(ev);
+        const g = (getDashGates() || []).find((item) => item.id === gate.id);
+        if (g) {
+          const place = placementFromMapPoint(g, p.x, p.y);
+          g.map_x = place.map_x;
+          g.map_y = place.map_y;
+          g.fence_heading_deg = place.fence_heading_deg;
+        }
+        setGateMarkerPosition(gate.id, g.map_x, g.map_y);
+        decorateGateMarkers();
+        drawAccessLayers();
+      };
+      handle.onpointerup = async (ev) => {
+        if (!gateDragState || gateDragState.gateId !== gate.id || ev.pointerId !== gateDragState.pointerId) {
+          return;
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        handle.classList.remove("dragging");
+        el.classList.remove("draggingGate");
+        const p = mapXY(ev);
+        gateDragState = null;
+        try {
+          const result = await commitScannerPlacement(gate.id, p.x, p.y);
+          if (!result) return;
+          portalHeadingPreview = result.place.fence_heading_deg;
+          syncFenceHeadingControls(result.place.fence_heading_deg);
+          renderAccessLists();
+          updateAccessMapPanel();
+          drawBase();
+          if (result.place.snapped) {
+            setStatus(`Scanner snapped to ${result.place.barrier_name} — entry gap created.`);
+          } else {
+            setStatus("Scanner moved.");
+          }
+        } catch (err) {
+          drawBase();
+          setStatus(err.message || String(err));
+        }
+      };
+      handle.onpointercancel = (ev) => {
+        if (!gateDragState || gateDragState.gateId !== gate.id) return;
+        handle.classList.remove("dragging");
+        el.classList.remove("draggingGate");
+        gateDragState = null;
+        drawBase();
+      };
+      el.appendChild(handle);
     });
   }
 
@@ -1603,39 +1769,23 @@
     if (selectedKind !== "gate" || !selectedId) return;
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     if (!gate) return;
-    const hit = findNearestBarrierSegment(gate.map_x, gate.map_y);
-    if (!hit || hit.dist > 0.05) {
-      setStatus("Draw a perimeter fence first, then place the scanner near it.");
-      return;
+    try {
+      const result = await commitScannerPlacement(selectedId, gate.map_x, gate.map_y);
+      if (!result) return;
+      if (result.place.snapped) {
+        document.getElementById("portalBarrier").value = result.place.barrier_id;
+        portalHeadingPreview = result.place.fence_heading_deg;
+        syncFenceHeadingControls(result.place.fence_heading_deg);
+        renderAccessLists();
+        updateAccessMapPanel();
+        drawBase();
+        setStatus(`Scanner snapped to ${result.place.barrier_name} — entry gap created.`);
+      } else {
+        setStatus("Move the scanner closer to a fence, or drag the yellow handle onto the barrier.");
+      }
+    } catch (err) {
+      setStatus(err.message || String(err));
     }
-    const heading = Math.round(fenceCrossingHeadingDeg(hit.a, hit.b));
-    const allowed = [...document.querySelectorAll(".portalClass:checked")].map((el) => el.value);
-    const updated = await api(`/events/${getDashEvent().id}/scanners/${selectedId}/access`, {
-      method: "PUT",
-      body: JSON.stringify({
-        zone_a_id: document.getElementById("portalZoneA")?.value || gate.zone_a_id || null,
-        zone_b_id: document.getElementById("portalZoneB")?.value || gate.zone_b_id || null,
-        allowed_classes: allowed.length ? allowed : gate.allowed_classes || [],
-        direction: document.getElementById("portalDirection")?.value || gate.direction || "bidirectional",
-        barrier_id: hit.barrier_id,
-        barrier_segment_index: hit.segIndex,
-        barrier_segment_t: hit.t,
-        map_x: hit.x,
-        map_y: hit.y,
-        fence_heading_deg: heading,
-        updated_by: "dash_access",
-      }),
-    });
-    const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
-    if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
-    document.getElementById("portalBarrier").value = hit.barrier_id;
-    portalHeadingPreview = heading;
-    syncFenceHeadingControls(heading);
-    renderAccessLists();
-    updateAccessMapPanel();
-    if (typeof drawBase === "function") drawBase();
-    drawAccessLayers();
-    setStatus(`Scanner snapped to ${hit.barrier_name} segment ${hit.segIndex + 1} (entry gap created).`);
   };
 
   async function handleAccessMapClick(p) {
@@ -1714,6 +1864,7 @@
       applyAccessLayerVisibility();
       if (typeof currentTab !== "undefined" && currentTab === "access") {
         decorateGateMarkers();
+        decorateGateDragHandles();
         drawSimLocationMarkers();
         drawAccessLayers();
       }
