@@ -48,6 +48,7 @@
   let draftPathTiles = new Set();
   let pathDragState = null;
   let pathDragPreviewTiles = new Set();
+  let pathDraftVertices = [];
   let pathBrushWidth = 1;
   let draftQueuePoints = [];
   let selectedBarrierId = null;
@@ -347,6 +348,11 @@
     if (zoneEditor) zoneEditor.classList.toggle("hidden", accessTool !== "fillZone");
 
     updateWorkLocationSectionVisibility();
+
+    const mapWrap = document.getElementById("mapWrap");
+    if (mapWrap) {
+      mapWrap.classList.toggle("accessPaintCursor", accessTool === "drawPath" || accessTool === "drawBarrier");
+    }
   }
 
   function getPathBrushWidth() {
@@ -508,14 +514,17 @@
     const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
     const width = getPathBrushWidth();
     pathBrushWidth = width;
-    pathDragState = { startTx: tx, startTy: ty, width };
+    pathDragState = { startTx: tx, startTy: ty, width, curX: p.x, curY: p.y };
     pathDragPreviewTiles = new Set();
     addBrushTilesAlongLine(tx, ty, tx, ty, width, pathDragPreviewTiles);
+    bindPathDragListeners();
     drawAccessLayers();
   }
 
   function updatePathDrag(p) {
     if (!pathDragState) return;
+    pathDragState.curX = p.x;
+    pathDragState.curY = p.y;
     const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
     pathDragPreviewTiles = new Set();
     addBrushTilesAlongLine(pathDragState.startTx, pathDragState.startTy, tx, ty, pathDragState.width, pathDragPreviewTiles);
@@ -525,11 +534,42 @@
   function endPathDrag() {
     if (!pathDragState) return;
     pathDragPreviewTiles.forEach((k) => draftPathTiles.add(k));
+    const end = normFromGrid(
+      gridFromNorm(pathDragState.curX, pathDragState.curY).gx,
+      gridFromNorm(pathDragState.curX, pathDragState.curY).gy
+    );
+    const start = normFromGrid(pathDragState.startTx, pathDragState.startTy);
+    pathDraftVertices.push(start);
+    pathDraftVertices.push(end);
     const count = draftPathTiles.size;
     pathDragState = null;
     pathDragPreviewTiles = new Set();
+    unbindPathDragListeners();
     drawAccessLayers();
     setStatus(`${count} path tile${count === 1 ? "" : "s"} painted (${pathWidthLabel(pathBrushWidth)}). Drag again or Finish Path.`);
+  }
+
+  function onDocumentPathDragMove(e) {
+    if (!pathDragState) return;
+    updatePathDrag(mapXY(e));
+  }
+
+  function onDocumentPathDragEnd() {
+    if (pathDragState) endPathDrag();
+  }
+
+  function bindPathDragListeners() {
+    if (document.body.dataset.pathDragBound) return;
+    document.body.dataset.pathDragBound = "1";
+    document.addEventListener("mousemove", onDocumentPathDragMove, true);
+    document.addEventListener("mouseup", onDocumentPathDragEnd, true);
+  }
+
+  function unbindPathDragListeners() {
+    if (!document.body.dataset.pathDragBound) return;
+    delete document.body.dataset.pathDragBound;
+    document.removeEventListener("mousemove", onDocumentPathDragMove, true);
+    document.removeEventListener("mouseup", onDocumentPathDragEnd, true);
   }
 
   function tilesToPayloadList(tileSet) {
@@ -1181,11 +1221,63 @@
       svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.id = "zoneSvg";
       svg.setAttribute("viewBox", `0 0 ${SVG_W} ${SVG_H}`);
+      svg.setAttribute("preserveAspectRatio", "none");
       svg.classList.add("accessOverlay");
-      svg.style.pointerEvents = "none";
-      wrap.appendChild(svg);
     }
+    svg.style.pointerEvents = "none";
+    wrap.appendChild(svg);
     return svg;
+  }
+
+  function pathStrokeWidthPx(widthTiles) {
+    return Math.max(5, Number(widthTiles || 1) * 4);
+  }
+
+  function drawPathLiveStroke(svg, state, committed) {
+    if (!state && !committed) return;
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.style.pointerEvents = "none";
+
+    if (state) {
+      const start = normFromGrid(state.startTx, state.startTy);
+      const end = { x: state.curX ?? start.x, y: state.curY ?? start.y };
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(start.x * SVG_W));
+      line.setAttribute("y1", String(start.y * SVG_H));
+      line.setAttribute("x2", String(end.x * SVG_W));
+      line.setAttribute("y2", String(end.y * SVG_H));
+      line.setAttribute("stroke", "#00e5ff");
+      line.setAttribute("stroke-width", String(pathStrokeWidthPx(state.width)));
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("opacity", "0.95");
+      g.appendChild(line);
+
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", String(end.x * SVG_W));
+      dot.setAttribute("cy", String(end.y * SVG_H));
+      dot.setAttribute("r", "5");
+      dot.setAttribute("fill", "#00e5ff");
+      dot.setAttribute("stroke", "#ffffff");
+      dot.setAttribute("stroke-width", "2");
+      g.appendChild(dot);
+    }
+
+    if (committed && committed.length >= 2) {
+      const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      pl.setAttribute("fill", "none");
+      pl.setAttribute(
+        "points",
+        committed.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+      );
+      pl.setAttribute("stroke", "#26c6da");
+      pl.setAttribute("stroke-width", String(pathStrokeWidthPx(getPathBrushWidth())));
+      pl.setAttribute("stroke-linecap", "round");
+      pl.setAttribute("stroke-linejoin", "round");
+      pl.setAttribute("opacity", "0.85");
+      g.appendChild(pl);
+    }
+
+    svg.appendChild(g);
   }
 
   function toSvg(x, y) {
@@ -1525,10 +1617,17 @@
       drawBarrierTileRects(
         svg,
         allDraftPathTileKeys(),
-        "#26a69a",
-        "rgba(38,166,154,0.72)",
+        "#00e5ff",
+        "rgba(0,229,255,0.55)",
         true
       );
+    }
+
+    if (
+      accessTool === "drawPath" &&
+      (pathDragState || draftPathTiles.size || pathDragPreviewTiles.size || pathDraftVertices.length >= 2)
+    ) {
+      drawPathLiveStroke(svg, pathDragState, pathDraftVertices);
     }
 
     accessPaths.forEach((path) => {
@@ -1952,12 +2051,13 @@
     draftPathTiles = new Set();
     pathDragState = null;
     pathDragPreviewTiles = new Set();
+    pathDraftVertices = [];
     draftQueuePoints = [];
     syncAccessToolbarButtons();
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
       drawBarrier: "Drag on the map to paint barrier tiles (2ft each). Release and drag again to extend. Finish when done.",
-      drawPath: "Drag to paint guest path tiles. Choose 1/2/4 tile brush width, then Finish Path.",
+      drawPath: "Drag on the map to draw a path — a cyan line follows your cursor and tiles stamp on release.",
       drawQueue:
         "Draw a queue line from the back of the line toward the scanner. Points snap to the 400×225 tile grid. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
@@ -2301,6 +2401,8 @@
     draftPathTiles = new Set();
     pathDragState = null;
     pathDragPreviewTiles = new Set();
+    pathDraftVertices = [];
+    unbindPathDragListeners();
     drawAccessLayers();
     setStatus("Cleared path paint. Drag to paint again.");
   };
@@ -2309,6 +2411,8 @@
     draftPathTiles = new Set();
     pathDragState = null;
     pathDragPreviewTiles = new Set();
+    pathDraftVertices = [];
+    unbindPathDragListeners();
     drawAccessLayers();
     setStatus("Path drawing cancelled.");
   };
@@ -2334,6 +2438,8 @@
       draftPathTiles = new Set();
       pathDragState = null;
       pathDragPreviewTiles = new Set();
+      pathDraftVertices = [];
+      unbindPathDragListeners();
       accessPaths.push(created);
       enterSelectCategory("paths", created.id);
       renderAccessLists();
@@ -2723,6 +2829,9 @@
         decorateGateDragHandles();
         drawSimLocationMarkers();
         drawAccessLayers();
+        const svg = document.getElementById("zoneSvg");
+        const stage = getMapStage();
+        if (svg && stage) stage.appendChild(svg);
       }
     };
 
