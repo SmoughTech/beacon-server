@@ -1168,6 +1168,7 @@ DASH_HTML = r'''
         </div>
         <div class="row" style="margin-top:8px">
           <button class="primary" onclick="finishDraftBarrier()">Finish Barrier</button>
+          <button onclick="closeDraftBarrier()">Close Perimeter</button>
           <button onclick="cancelDraftBarrier()">Cancel Draw</button>
         </div>
         <div class="row" style="margin-top:10px">
@@ -1428,7 +1429,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.8.0"></script>
+<script src="/static/dash/access-control.js?v=3.9.0"></script>
 </body>
 </html>
 '''

@@ -31,6 +31,7 @@ class AccessBarrierCreate(BaseModel):
     name: str = Field(default="Barrier", min_length=1, max_length=120)
     barrier_type: str = Field(default="fence", max_length=40)
     points: List[MapPoint] = Field(min_length=2)
+    closed: bool = Field(default=False)
     updated_by: Optional[str] = "dash_access"
 
 
@@ -38,6 +39,7 @@ class AccessBarrierUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     barrier_type: Optional[str] = Field(default=None, max_length=40)
     points: Optional[List[MapPoint]] = Field(default=None, min_length=2)
+    closed: Optional[bool] = None
     updated_by: Optional[str] = "dash_access"
 
 
@@ -63,6 +65,11 @@ class ScannerAccessUpdate(BaseModel):
     allowed_classes: List[str] = Field(default_factory=list)
     direction: str = Field(default="bidirectional", max_length=40)
     barrier_id: Optional[str] = Field(default=None, max_length=80)
+    barrier_segment_index: Optional[int] = Field(default=None, ge=0)
+    barrier_segment_t: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    fence_heading_deg: Optional[float] = Field(default=None, ge=0.0, lt=360.0)
     updated_by: Optional[str] = "dash_access"
 
 
@@ -192,12 +199,14 @@ def _json_to_points(raw: Optional[str]) -> list[dict[str, float]]:
 
 
 def barrier_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    keys = row.keys()
     return {
         "id": row["id"],
         "event_id": row["event_id"],
         "name": row["name"],
         "barrier_type": row["barrier_type"],
         "points": _json_to_points(row["points_json"]),
+        "closed": bool(row["closed"]) if "closed" in keys else False,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
@@ -235,6 +244,8 @@ def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
         "allowed_classes": allowed_classes,
         "direction": row["direction"] if "direction" in keys else "bidirectional",
         "barrier_id": row["barrier_id"] if "barrier_id" in keys else None,
+        "barrier_segment_index": row["barrier_segment_index"] if "barrier_segment_index" in keys else None,
+        "barrier_segment_t": row["barrier_segment_t"] if "barrier_segment_t" in keys else None,
     }
 
 
@@ -292,6 +303,14 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE wrstops_gates ADD COLUMN direction TEXT NOT NULL DEFAULT 'bidirectional'")
     if "barrier_id" not in gate_columns:
         conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_id TEXT")
+    if "barrier_segment_index" not in gate_columns:
+        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_segment_index INTEGER")
+    if "barrier_segment_t" not in gate_columns:
+        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_segment_t REAL")
+
+    barrier_columns = {row["name"] for row in conn.execute("PRAGMA table_info(access_barriers)").fetchall()}
+    if "closed" not in barrier_columns:
+        conn.execute("ALTER TABLE access_barriers ADD COLUMN closed INTEGER NOT NULL DEFAULT 0")
 
     conn.execute(
         """
@@ -340,9 +359,9 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             conn.execute(
                 """
                 INSERT INTO access_barriers (
-                    id, event_id, name, barrier_type, points_json,
+                    id, event_id, name, barrier_type, points_json, closed,
                     created_at, updated_at, updated_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     barrier_id,
@@ -350,6 +369,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     payload.name.strip() or "Barrier",
                     normalize_barrier_type(payload.barrier_type),
                     _points_to_json(payload.points),
+                    1 if payload.closed else 0,
                     timestamp,
                     timestamp,
                     payload.updated_by,
@@ -383,14 +403,21 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 if payload.points is not None
                 else existing["points_json"]
             )
+            keys = existing.keys()
+            closed = (
+                1 if payload.closed else 0
+                if payload.closed is not None
+                else (existing["closed"] if "closed" in keys else 0)
+            )
             timestamp = now_iso()
             conn.execute(
                 """
                 UPDATE access_barriers
-                SET name = ?, barrier_type = ?, points_json = ?, updated_at = ?, updated_by = ?
+                SET name = ?, barrier_type = ?, points_json = ?, closed = ?,
+                    updated_at = ?, updated_by = ?
                 WHERE id = ? AND event_id = ?
                 """,
-                (name, barrier_type, points_json, timestamp, payload.updated_by, barrier_id, event_id),
+                (name, barrier_type, points_json, closed, timestamp, payload.updated_by, barrier_id, event_id),
             )
             conn.commit()
             row = conn.execute(
@@ -562,11 +589,30 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             allowed = [c for c in allowed if c in ZONE_CLASSES]
 
             timestamp = now_iso()
+            map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
+            map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+            fence_heading_deg = (
+                float(payload.fence_heading_deg) % 360
+                if payload.fence_heading_deg is not None
+                else float(existing["fence_heading_deg"] if "fence_heading_deg" in existing.keys() else 0.0) % 360
+            )
+            barrier_segment_index = (
+                payload.barrier_segment_index
+                if payload.barrier_segment_index is not None
+                else (existing["barrier_segment_index"] if "barrier_segment_index" in existing.keys() else None)
+            )
+            barrier_segment_t = (
+                payload.barrier_segment_t
+                if payload.barrier_segment_t is not None
+                else (existing["barrier_segment_t"] if "barrier_segment_t" in existing.keys() else None)
+            )
             conn.execute(
                 """
                 UPDATE wrstops_gates
                 SET zone_a_id = ?, zone_b_id = ?, allowed_classes = ?, direction = ?,
-                    barrier_id = ?, updated_at = ?, updated_by = ?
+                    barrier_id = ?, barrier_segment_index = ?, barrier_segment_t = ?,
+                    map_x = ?, map_y = ?, fence_heading_deg = ?,
+                    updated_at = ?, updated_by = ?
                 WHERE id = ? AND event_id = ?
                 """,
                 (
@@ -575,6 +621,11 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     json.dumps(allowed),
                     normalize_direction(payload.direction),
                     payload.barrier_id,
+                    barrier_segment_index,
+                    barrier_segment_t,
+                    map_x,
+                    map_y,
+                    fence_heading_deg,
                     timestamp,
                     payload.updated_by,
                     gate_id,

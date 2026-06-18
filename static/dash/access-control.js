@@ -5,6 +5,9 @@
   const GRID_H = 225;
   const PORTAL_SNAP_DIST = 0.011;
   const PORTAL_SNAP_RADIUS = 0.014;
+  const BARRIER_ENDPOINT_SNAP_RADIUS = 0.014;
+  const BARRIER_SEGMENT_SNAP_RADIUS = 0.012;
+  const PORTAL_GAP_HALF_WIDTH = 0.014;
 
   const ZONE_COLORS = {
     ga: "rgba(76,175,80,0.38)",
@@ -29,6 +32,7 @@
   let accessZones = [];
   let accessTool = "select";
   let draftBarrierPoints = [];
+  let draftBarrierClosed = false;
   let selectedBarrierId = null;
   let selectedZoneId = null;
   let fillZoneClass = "ga";
@@ -483,6 +487,180 @@
     };
   }
 
+  function iterBarrierSegments(barrier) {
+    const pts = barrier?.points || [];
+    if (pts.length < 2) return [];
+    const closed = !!barrier.closed;
+    const segCount = pts.length - 1 + (closed && pts.length >= 3 ? 1 : 0);
+    const out = [];
+    for (let i = 0; i < segCount; i++) {
+      out.push({ segIndex: i, a: pts[i], b: pts[(i + 1) % pts.length] });
+    }
+    return out;
+  }
+
+  function projectPointOnSegment(a, b, px, py) {
+    const ax = a.x;
+    const ay = a.y;
+    const bx = b.x;
+    const by = b.y;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 1e-12) {
+      const dist = Math.hypot(px - ax, py - ay);
+      return { t: 0, x: ax, y: ay, dist };
+    }
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const x = ax + dx * t;
+    const y = ay + dy * t;
+    return { t, x, y, dist: Math.hypot(px - x, py - y) };
+  }
+
+  function segmentTangentHeadingDeg(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    return ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+  }
+
+  function fenceCrossingHeadingDeg(a, b) {
+    return (segmentTangentHeadingDeg(a, b) + 90) % 360;
+  }
+
+  function findNearestBarrierSegment(px, py) {
+    let best = null;
+    accessBarriers.forEach((barrier) => {
+      iterBarrierSegments(barrier).forEach(({ segIndex, a, b }) => {
+        const proj = projectPointOnSegment(a, b, px, py);
+        if (!best || proj.dist < best.dist) {
+          best = {
+            barrier_id: barrier.id,
+            barrier_name: barrier.name,
+            segIndex,
+            t: proj.t,
+            x: proj.x,
+            y: proj.y,
+            dist: proj.dist,
+            a,
+            b,
+          };
+        }
+      });
+    });
+    return best;
+  }
+
+  function snapToExistingBarrier(p) {
+    let best = null;
+    let bestDist = BARRIER_ENDPOINT_SNAP_RADIUS;
+    accessBarriers.forEach((barrier) => {
+      (barrier.points || []).forEach((pt, idx) => {
+        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = {
+            x: pt.x,
+            y: pt.y,
+            snapped: true,
+            snapKind: "barrier_endpoint",
+            barrierId: barrier.id,
+            barrierName: barrier.name,
+            pointIndex: idx,
+          };
+        }
+      });
+    });
+    if (best) return best;
+
+    bestDist = BARRIER_SEGMENT_SNAP_RADIUS;
+    accessBarriers.forEach((barrier) => {
+      iterBarrierSegments(barrier).forEach(({ segIndex, a, b }) => {
+        const proj = projectPointOnSegment(a, b, p.x, p.y);
+        if (proj.dist < bestDist) {
+          bestDist = proj.dist;
+          best = {
+            x: proj.x,
+            y: proj.y,
+            snapped: true,
+            snapKind: "barrier_segment",
+            barrierId: barrier.id,
+            barrierName: barrier.name,
+            segIndex,
+            t: proj.t,
+          };
+        }
+      });
+    });
+    return best || { x: p.x, y: p.y, snapped: false };
+  }
+
+  function snapBarrierPoint(p, gates) {
+    const scannerSnap = snapAccessPoint(p, gates);
+    if (scannerSnap.snapped) return scannerSnap;
+    const barrierSnap = snapToExistingBarrier(p);
+    if (barrierSnap.snapped) return barrierSnap;
+    return { x: p.x, y: p.y, snapped: false };
+  }
+
+  function drawNormSegmentWithGaps(grid, a, b, gaps, mark) {
+    const ax = a.x;
+    const ay = a.y;
+    const bx = b.x;
+    const by = b.y;
+    const segLen = Math.hypot(bx - ax, by - ay);
+    if (segLen < 1e-9) return;
+    let intervals = [[0, 1]];
+    gaps
+      .slice()
+      .sort((x, y) => x[0] - y[0])
+      .forEach(([tCenter, halfWidth]) => {
+        const halfT = halfWidth / segLen;
+        const gapLo = Math.max(0, tCenter - halfT);
+        const gapHi = Math.min(1, tCenter + halfT);
+        const next = [];
+        intervals.forEach(([lo, hi]) => {
+          if (hi <= gapLo || lo >= gapHi) {
+            next.push([lo, hi]);
+          } else {
+            if (lo < gapLo) next.push([lo, gapLo]);
+            if (hi > gapHi) next.push([gapHi, hi]);
+          }
+        });
+        intervals = next;
+      });
+    intervals.forEach(([lo, hi]) => {
+      if (hi - lo < 1e-6) return;
+      const x0 = ax + (bx - ax) * lo;
+      const y0 = ay + (by - ay) * lo;
+      const x1 = ax + (bx - ax) * hi;
+      const y1 = ay + (by - ay) * hi;
+      const ga = gridFromNorm(x0, y0);
+      const gb = gridFromNorm(x1, y1);
+      drawGridLine(grid, ga.gx, ga.gy, gb.gx, gb.gy, mark);
+    });
+  }
+
+  function gateSegmentGaps(gate, a, b) {
+    const cx = gate?.map_x ?? gate?.mapX;
+    const cy = gate?.map_y ?? gate?.mapY;
+    if (cx == null || cy == null) return [];
+    let t = gate.barrier_segment_t;
+    if (t == null) t = projectPointOnSegment(a, b, cx, cy).t;
+    return [[Number(t), PORTAL_GAP_HALF_WIDTH]];
+  }
+
+  function collectGateAttachments(gates) {
+    const attachments = new Map();
+    (gates || []).forEach((gate) => {
+      if (!gate.barrier_id || gate.barrier_segment_index == null) return;
+      const key = `${gate.barrier_id}:${gate.barrier_segment_index}`;
+      if (!attachments.has(key)) attachments.set(key, []);
+      attachments.get(key).push(gate);
+    });
+    return attachments;
+  }
+
   function snapAccessPoint(p, gates) {
     let best = null;
     let bestDist = PORTAL_SNAP_RADIUS;
@@ -511,9 +689,15 @@
     draftBarrierPoints.push({ x: p.x, y: p.y });
     drawAccessLayers();
     if (snapInfo?.snapped) {
-      setStatus(`Snapped to ${snapInfo.gateName} side ${snapInfo.side.toUpperCase()} (point ${draftBarrierPoints.length}).`);
+      if (snapInfo.snapKind === "barrier_endpoint") {
+        setStatus(`Snapped to ${snapInfo.barrierName} corner (point ${draftBarrierPoints.length}).`);
+      } else if (snapInfo.snapKind === "barrier_segment") {
+        setStatus(`Snapped to ${snapInfo.barrierName} edge (point ${draftBarrierPoints.length}).`);
+      } else {
+        setStatus(`Snapped to ${snapInfo.gateName} side ${snapInfo.side.toUpperCase()} (point ${draftBarrierPoints.length}).`);
+      }
     } else {
-      setStatus(`Barrier point ${draftBarrierPoints.length}. Click Finish Barrier when done.`);
+      setStatus(`Barrier point ${draftBarrierPoints.length}. Snap to corners/edges or click Close Perimeter when done.`);
     }
   }
 
@@ -568,14 +752,18 @@
     const mark = (gx, gy) => {
       if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 1;
     };
+    const attachments = collectGateAttachments(gates);
 
     accessBarriers.forEach((barrier) => {
-      const pts = barrier.points || [];
-      for (let i = 1; i < pts.length; i++) {
-        const a = gridFromNorm(pts[i - 1].x, pts[i - 1].y);
-        const b = gridFromNorm(pts[i].x, pts[i].y);
-        drawGridLine(grid, a.gx, a.gy, b.gx, b.gy, mark);
-      }
+      iterBarrierSegments(barrier).forEach(({ segIndex, a, b }) => {
+        const key = `${barrier.id}:${segIndex}`;
+        const segGates = attachments.get(key) || [];
+        const gaps = [];
+        segGates.forEach((gate) => {
+          gateSegmentGaps(gate, a, b).forEach((gap) => gaps.push(gap));
+        });
+        drawNormSegmentWithGaps(grid, a, b, gaps, mark);
+      });
     });
 
     (gates || []).forEach((gate) => addPortalVirtualWall(grid, gate));
@@ -749,9 +937,10 @@
       if (pts.length < 2) return;
       const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
       pl.setAttribute("fill", "none");
+      const closedPts = barrier.closed && pts.length >= 3 ? [...pts, pts[0]] : pts;
       pl.setAttribute(
         "points",
-        pts.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+        closedPts.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
       );
       pl.setAttribute("stroke", selectedBarrierId === barrier.id ? "#6df7a7" : "#ff8a65");
       pl.setAttribute("stroke-width", selectedBarrierId === barrier.id ? "7" : "5");
@@ -766,11 +955,13 @@
     });
 
     if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
+      const draftPts = draftBarrierPoints.slice();
+      if (draftBarrierClosed && draftPts.length >= 3) draftPts.push(draftPts[0]);
       const draft = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
       draft.setAttribute("fill", "none");
       draft.setAttribute(
         "points",
-        draftBarrierPoints.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+        draftPts.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
       );
       draft.setAttribute("stroke", "#ffd166");
       draft.setAttribute("stroke-width", "4");
@@ -977,13 +1168,14 @@
   function setAccessTool(tool) {
     accessTool = tool;
     draftBarrierPoints = [];
+    draftBarrierClosed = false;
     document.querySelectorAll("[data-access-tool]").forEach((btn) => {
       btn.classList.toggle("primary", btn.dataset.accessTool === tool);
     });
     const hints = {
       select: "Select barriers, zones, or scanners on the map or in the list.",
-      drawBarrier: "Click the map or scanner edge snap dots to trace your fence.",
-      fillZone: "Click inside a barrier-enclosed area. Scanners complete the boundary (A↔B) so fill won't leak to the map edge.",
+      drawBarrier: "Trace a perimeter fence/barricade. Points snap to existing corners, edges, and scanner snap dots.",
+      fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
       linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
       workLocations:
@@ -1006,7 +1198,7 @@
       accessBarriers
         .map(
           (b) =>
-            `<div class="card ${selectedBarrierId === b.id ? "selected" : ""}" onclick="selectAccessBarrier('${b.id}')"><h3>${escapeHtml(b.name)}</h3><p>${escapeHtml(b.barrier_type)} • ${(b.points || []).length} points</p><button class="danger" onclick="event.stopPropagation(); deleteAccessBarrier('${b.id}')">Delete</button></div>`
+            `<div class="card ${selectedBarrierId === b.id ? "selected" : ""}" onclick="selectAccessBarrier('${b.id}')"><h3>${escapeHtml(b.name)}</h3><p>${escapeHtml(b.barrier_type)} • ${(b.points || []).length} points${b.closed ? " • closed perimeter" : ""}</p><button class="danger" onclick="event.stopPropagation(); deleteAccessBarrier('${b.id}')">Delete</button></div>`
         )
         .join("") || '<p class="muted">No barriers yet.</p>';
 
@@ -1131,7 +1323,7 @@
           .join("")}</div>
         <div class="row" style="margin-top:10px">
           <button class="primary" onclick="event.stopPropagation(); savePortalAccess()">Save Rules</button>
-          <button onclick="event.stopPropagation(); snapPortalToBarrier()">Snap To Nearest Barrier</button>
+          <button onclick="event.stopPropagation(); snapPortalToBarrier()">Snap Onto Fence (create entry)</button>
         </div>`;
 
     editor.innerHTML = gatePanel
@@ -1188,12 +1380,26 @@
     drawAccessLayers();
   };
 
+  window.closeDraftBarrier = function () {
+    if (draftBarrierPoints.length < 3) {
+      setStatus("Add at least 3 points before closing the perimeter.");
+      return;
+    }
+    draftBarrierClosed = true;
+    drawAccessLayers();
+    setStatus("Perimeter closed. Click Finish Barrier to save.");
+  };
+
   window.finishDraftBarrier = async function () {
     if (!getDashEvent()) return;
     if (draftBarrierPoints.length < 2) {
       setStatus("Add at least 2 points before finishing a barrier.");
       return;
     }
+    const first = draftBarrierPoints[0];
+    const last = draftBarrierPoints[draftBarrierPoints.length - 1];
+    const nearStart = Math.hypot(first.x - last.x, first.y - last.y) < BARRIER_ENDPOINT_SNAP_RADIUS;
+    const closed = draftBarrierClosed || (draftBarrierPoints.length >= 3 && nearStart);
     const name = document.getElementById("accessBarrierName")?.value?.trim() || "Barrier";
     const barrier_type = document.getElementById("accessBarrierType")?.value || "fence";
     const created = await api(`/events/${getDashEvent().id}/access-barriers`, {
@@ -1202,10 +1408,12 @@
         name,
         barrier_type,
         points: draftBarrierPoints,
+        closed,
         updated_by: "dash_access",
       }),
     });
     draftBarrierPoints = [];
+    draftBarrierClosed = false;
     accessBarriers.push(created);
     renderAccessLists();
     drawAccessLayers();
@@ -1214,6 +1422,7 @@
 
   window.cancelDraftBarrier = function () {
     draftBarrierPoints = [];
+    draftBarrierClosed = false;
     drawAccessLayers();
     setStatus("Barrier drawing cancelled.");
   };
@@ -1390,40 +1599,50 @@
     setStatus("Saved scanner access rules.");
   };
 
-  window.snapPortalToBarrier = function () {
+  window.snapPortalToBarrier = async function () {
     if (selectedKind !== "gate" || !selectedId) return;
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     if (!gate) return;
-    let best = null;
-    let bestDist = Infinity;
-    accessBarriers.forEach((barrier) => {
-      (barrier.points || []).forEach((p, i) => {
-        if (i === 0) return;
-        const a = barrier.points[i - 1];
-        const b = p;
-        const t = 0.5;
-        const mx = a.x + (b.x - a.x) * t;
-        const my = a.y + (b.y - a.y) * t;
-        const d = Math.hypot(mx - gate.map_x, my - gate.map_y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = { barrier_id: barrier.id, mx, my };
-        }
-      });
-    });
-    if (!best) {
-      setStatus("Draw barriers first, then snap the scanner.");
+    const hit = findNearestBarrierSegment(gate.map_x, gate.map_y);
+    if (!hit || hit.dist > 0.05) {
+      setStatus("Draw a perimeter fence first, then place the scanner near it.");
       return;
     }
-    document.getElementById("portalBarrier").value = best.barrier_id;
-    setStatus(`Snapped scanner to nearest barrier (${bestDist.toFixed(4)} map units away).`);
+    const heading = Math.round(fenceCrossingHeadingDeg(hit.a, hit.b));
+    const allowed = [...document.querySelectorAll(".portalClass:checked")].map((el) => el.value);
+    const updated = await api(`/events/${getDashEvent().id}/scanners/${selectedId}/access`, {
+      method: "PUT",
+      body: JSON.stringify({
+        zone_a_id: document.getElementById("portalZoneA")?.value || gate.zone_a_id || null,
+        zone_b_id: document.getElementById("portalZoneB")?.value || gate.zone_b_id || null,
+        allowed_classes: allowed.length ? allowed : gate.allowed_classes || [],
+        direction: document.getElementById("portalDirection")?.value || gate.direction || "bidirectional",
+        barrier_id: hit.barrier_id,
+        barrier_segment_index: hit.segIndex,
+        barrier_segment_t: hit.t,
+        map_x: hit.x,
+        map_y: hit.y,
+        fence_heading_deg: heading,
+        updated_by: "dash_access",
+      }),
+    });
+    const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
+    if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
+    document.getElementById("portalBarrier").value = hit.barrier_id;
+    portalHeadingPreview = heading;
+    syncFenceHeadingControls(heading);
+    renderAccessLists();
+    updateAccessMapPanel();
+    if (typeof drawBase === "function") drawBase();
+    drawAccessLayers();
+    setStatus(`Scanner snapped to ${hit.barrier_name} segment ${hit.segIndex + 1} (entry gap created).`);
   };
 
   async function handleAccessMapClick(p) {
     if (typeof currentTab === "undefined" || currentTab !== "access") return false;
 
     if (accessTool === "drawBarrier") {
-      const snapped = snapAccessPoint(p, getDashGates());
+      const snapped = snapBarrierPoint(p, getDashGates());
       addDraftBarrierPoint({ x: snapped.x, y: snapped.y }, snapped);
       return true;
     }

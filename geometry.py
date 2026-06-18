@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 GRID_W = 400
 GRID_H = 225
 PORTAL_SNAP_DIST = 0.011
 PORTAL_VIRTUAL_WALL_EXTEND = 0.006
+PORTAL_GAP_HALF_WIDTH = 0.014
 
 
 def grid_from_norm(x: float, y: float) -> tuple[int, int]:
@@ -77,6 +78,115 @@ def draw_grid_line(
             y0 += sy
 
 
+def iter_barrier_segments(barrier: dict[str, Any]) -> Iterator[tuple[int, dict[str, Any], dict[str, Any]]]:
+    pts = barrier.get("points") or []
+    if len(pts) < 2:
+        return
+    closed = bool(barrier.get("closed"))
+    seg_count = len(pts) - 1
+    if closed and len(pts) >= 3:
+        seg_count += 1
+    for i in range(seg_count):
+        yield i, pts[i], pts[(i + 1) % len(pts)]
+
+
+def project_point_on_segment(
+    a: dict[str, Any],
+    b: dict[str, Any],
+    px: float,
+    py: float,
+) -> tuple[float, float, float, float]:
+    ax, ay = float(a["x"]), float(a["y"])
+    bx, by = float(b["x"]), float(b["y"])
+    dx, dy = bx - ax, by - ay
+    len2 = dx * dx + dy * dy
+    if len2 < 1e-12:
+        dist = math.hypot(px - ax, py - ay)
+        return 0.0, ax, ay, dist
+    t = ((px - ax) * dx + (py - ay) * dy) / len2
+    t = max(0.0, min(1.0, t))
+    mx = ax + dx * t
+    my = ay + dy * t
+    dist = math.hypot(px - mx, py - my)
+    return t, mx, my, dist
+
+
+def segment_tangent_heading_deg(a: dict[str, Any], b: dict[str, Any]) -> float:
+    dx = float(b["x"]) - float(a["x"])
+    dy = float(b["y"]) - float(a["y"])
+    return math.degrees(math.atan2(dy, dx)) % 360
+
+
+def fence_crossing_heading_deg(a: dict[str, Any], b: dict[str, Any]) -> float:
+    return (segment_tangent_heading_deg(a, b) + 90.0) % 360
+
+
+def draw_norm_segment_with_gaps(
+    grid: list[list[int]],
+    a: dict[str, Any],
+    b: dict[str, Any],
+    gaps: list[tuple[float, float]],
+    mark: Callable[[int, int], None],
+) -> None:
+    ax, ay = float(a["x"]), float(a["y"])
+    bx, by = float(b["x"]), float(b["y"])
+    seg_len = math.hypot(bx - ax, by - ay)
+    if seg_len < 1e-9:
+        return
+
+    intervals = [(0.0, 1.0)]
+    for t_center, half_width in sorted(gaps):
+        half_t = half_width / seg_len
+        gap_lo = max(0.0, t_center - half_t)
+        gap_hi = min(1.0, t_center + half_t)
+        new_intervals: list[tuple[float, float]] = []
+        for lo, hi in intervals:
+            if hi <= gap_lo or lo >= gap_hi:
+                new_intervals.append((lo, hi))
+            else:
+                if lo < gap_lo:
+                    new_intervals.append((lo, gap_lo))
+                if hi > gap_hi:
+                    new_intervals.append((gap_hi, hi))
+        intervals = new_intervals
+
+    for lo, hi in intervals:
+        if hi - lo < 1e-6:
+            continue
+        x0 = ax + (bx - ax) * lo
+        y0 = ay + (by - ay) * lo
+        x1 = ax + (bx - ax) * hi
+        y1 = ay + (by - ay) * hi
+        ga = grid_from_norm(x0, y0)
+        gb = grid_from_norm(x1, y1)
+        draw_grid_line(grid, ga[0], ga[1], gb[0], gb[1], mark)
+
+
+def gate_segment_gaps(gate: dict[str, Any], a: dict[str, Any], b: dict[str, Any]) -> list[tuple[float, float]]:
+    cx = gate.get("map_x", gate.get("mapX"))
+    cy = gate.get("map_y", gate.get("mapY"))
+    if cx is None or cy is None:
+        return []
+    seg_t = gate.get("barrier_segment_t")
+    if seg_t is None:
+        seg_t, _, _, _ = project_point_on_segment(a, b, float(cx), float(cy))
+    return [(float(seg_t), PORTAL_GAP_HALF_WIDTH)]
+
+
+def collect_gate_attachments(
+    gates: list[dict[str, Any]],
+) -> dict[tuple[str, int], list[dict[str, Any]]]:
+    attachments: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for gate in gates:
+        barrier_id = gate.get("barrier_id")
+        seg_idx = gate.get("barrier_segment_index")
+        if not barrier_id or seg_idx is None:
+            continue
+        key = (str(barrier_id), int(seg_idx))
+        attachments.setdefault(key, []).append(gate)
+    return attachments
+
+
 def add_portal_virtual_wall(grid: list[list[int]], gate: dict[str, Any]) -> None:
     pair = get_portal_snap_pair(gate)
     if pair is None:
@@ -106,12 +216,16 @@ def rasterize_walls(
         if 0 <= gx < GRID_W and 0 <= gy < GRID_H:
             grid[gy][gx] = 1
 
+    attachments = collect_gate_attachments(gates)
+
     for barrier in barriers:
-        pts = barrier.get("points") or []
-        for i in range(1, len(pts)):
-            a = grid_from_norm(float(pts[i - 1]["x"]), float(pts[i - 1]["y"]))
-            b = grid_from_norm(float(pts[i]["x"]), float(pts[i]["y"]))
-            draw_grid_line(grid, a[0], a[1], b[0], b[1], mark)
+        barrier_id = str(barrier.get("id", ""))
+        for seg_idx, a, b in iter_barrier_segments(barrier):
+            seg_gates = attachments.get((barrier_id, seg_idx), [])
+            gaps: list[tuple[float, float]] = []
+            for gate in seg_gates:
+                gaps.extend(gate_segment_gaps(gate, a, b))
+            draw_norm_segment_with_gaps(grid, a, b, gaps, mark)
 
     for gate in gates:
         add_portal_virtual_wall(grid, gate)

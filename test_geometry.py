@@ -1,6 +1,13 @@
 """Tests for geometry navmesh rasterization."""
 
-from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
+from geometry import (
+    GRID_H,
+    GRID_W,
+    build_scanner_graph,
+    grid_from_norm,
+    navmesh_to_bytes,
+    rasterize_walls,
+)
 
 
 def test_empty_layout_walkable():
@@ -20,6 +27,48 @@ def test_barrier_blocks_cells():
     grid = rasterize_walls(barriers, [])
     raw = navmesh_to_bytes(grid)
     assert any(b == 1 for b in raw)
+
+
+def test_closed_barrier_blocks_closing_segment():
+    barriers = [
+        {
+            "id": "b1",
+            "closed": True,
+            "points": [
+                {"x": 0.2, "y": 0.2},
+                {"x": 0.8, "y": 0.2},
+                {"x": 0.8, "y": 0.8},
+            ],
+        }
+    ]
+    grid = rasterize_walls(barriers, [])
+    gx, gy = grid_from_norm(0.5, 0.2)
+    assert grid[gy][gx] == 1
+
+
+def test_scanner_on_barrier_creates_walkable_gap():
+    barriers = [
+        {
+            "id": "b1",
+            "points": [{"x": 0.2, "y": 0.5}, {"x": 0.8, "y": 0.5}],
+        }
+    ]
+    gates = [
+        {
+            "id": "gate_1",
+            "map_x": 0.5,
+            "map_y": 0.5,
+            "fence_heading_deg": 90,
+            "barrier_id": "b1",
+            "barrier_segment_index": 0,
+            "barrier_segment_t": 0.5,
+        }
+    ]
+    grid = rasterize_walls(barriers, gates)
+    gx, gy = grid_from_norm(0.49, 0.5)
+    assert grid[gy][gx] == 0
+    cx, cy = grid_from_norm(0.5, 0.5)
+    assert grid[cy][cx] == 1
 
 
 def test_scanner_graph():
