@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 
-from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, zone_row_to_dict
+from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, sim_location_row_to_dict, zone_row_to_dict
 from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
 
 
@@ -66,11 +66,20 @@ def register_sim_layout(
                 """,
                 (event_id,),
             ).fetchall()
+            sim_location_rows = conn.execute(
+                """
+                SELECT * FROM sim_locations
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
 
         barriers = [barrier_row_to_dict(row) for row in barrier_rows]
         zones = [zone_row_to_dict(row) for row in zone_rows]
         gates = [scanner_gate_row_to_dict(row) for row in gate_rows]
         anchors = [calibration_anchor_row_to_dict(row) for row in anchor_rows]
+        sim_locations = [sim_location_row_to_dict(row) for row in sim_location_rows]
 
         grid = rasterize_walls(barriers, gates)
         navmesh_raw = navmesh_to_bytes(grid)
@@ -94,6 +103,7 @@ def register_sim_layout(
             "scanners": gates,
             "gates": gates,
             "calibration_anchors": anchors,
+            "sim_locations": sim_locations,
             "navmesh": {
                 "encoding": "base64",
                 "width": GRID_W,

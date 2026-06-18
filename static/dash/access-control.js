@@ -36,7 +36,25 @@
   let portalFlowFlipPreview = null;
   const ACCESS_LAYER_KEY = "beacon_access_layers";
   const SCANNER_SCALE_KEY = "beacon_dash_scanner_scale";
-  let accessLayers = { snapPoints: true, barriers: true, zones: true, gates: true, pois: true, anchors: true };
+  const SIM_LOCATION_META = {
+    food_tent: { label: "Food Tent", target: "vendor", icon: "F", marker: "vendor" },
+    food_trailer: { label: "Food Trailer", target: "vendor", icon: "F", marker: "vendor" },
+    staff_spot: { label: "Staff Spot", target: "staff", icon: "W", marker: "staff" },
+    staff_trailer: { label: "Staff Trailer", target: "staff", icon: "W", marker: "staff" },
+    staff_tent: { label: "Staff Tent", target: "staff", icon: "W", marker: "staff" },
+  };
+  let accessLayers = {
+    snapPoints: true,
+    barriers: true,
+    zones: true,
+    gates: true,
+    pois: true,
+    anchors: true,
+    workLocations: true,
+  };
+  let accessSimLocations = [];
+  let selectedSimLocationId = null;
+  let placeSimLocationType = "staff_spot";
 
   function getScannerMarkerScale() {
     const raw = Number(localStorage.getItem(SCANNER_SCALE_KEY));
@@ -79,6 +97,7 @@
       accessLayerGates: "gates",
       accessLayerPois: "pois",
       accessLayerAnchors: "anchors",
+      accessLayerWorkLocs: "workLocations",
     };
     Object.entries(map).forEach(([id, key]) => {
       const el = document.getElementById(id);
@@ -96,11 +115,135 @@
     document.querySelectorAll(".marker.anchor").forEach((el) => {
       el.style.display = accessLayers.anchors ? "" : "none";
     });
+    document.querySelectorAll(".marker.simLoc").forEach((el) => {
+      el.style.display = accessLayers.workLocations ? "" : "none";
+    });
   }
+
+  function simLocationMeta(loc) {
+    const t = String(loc?.location_type || loc?.locationType || "staff_spot").toLowerCase();
+    return SIM_LOCATION_META[t] || SIM_LOCATION_META.staff_spot;
+  }
+
+  function drawSimLocationMarkers() {
+    if (!accessLayers.workLocations) return;
+    if (typeof marker !== "function" || typeof getMapStage !== "function") return;
+    accessSimLocations.forEach((loc) => {
+      const meta = simLocationMeta(loc);
+      const el = marker(
+        loc.map_x,
+        loc.map_y,
+        `simLoc ${meta.marker}${selectedSimLocationId === loc.id ? " selected" : ""}`,
+        `${loc.name} (${meta.label})`,
+        () => selectSimLocation(loc.id)
+      );
+      el.dataset.simLocId = loc.id;
+      el.dataset.simLocIcon = meta.icon;
+      el.setAttribute("data-sim-loc-icon", meta.icon);
+    });
+  }
+
+  function updateWorkLocationSectionVisibility() {
+    const section = document.getElementById("accessWorkLocationSection");
+    if (section) section.classList.toggle("hidden", accessTool !== "workLocations");
+  }
+
+  function renderWorkLocationSection() {
+    const section = document.getElementById("accessWorkLocationSection");
+    if (!section) return;
+    updateWorkLocationSectionVisibility();
+    if (accessTool !== "workLocations") {
+      section.innerHTML = "";
+      return;
+    }
+
+    const typeOptions = Object.entries(SIM_LOCATION_META)
+      .map(
+        ([value, meta]) =>
+          `<option value="${value}" ${placeSimLocationType === value ? "selected" : ""}>${meta.label} (${meta.target})</option>`
+      )
+      .join("");
+
+    const cards = accessSimLocations
+      .map((loc) => {
+        const meta = simLocationMeta(loc);
+        const sel = selectedSimLocationId === loc.id;
+        const editor = sel
+          ? `<label>Name</label><input id="editSimLocName" value="${escapeHtml(loc.name)}" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"><label>Type</label><select id="editSimLocType" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()">${Object.entries(
+              SIM_LOCATION_META
+            )
+              .map(
+                ([value, m]) =>
+                  `<option value="${value}" ${loc.location_type === value ? "selected" : ""}>${m.label}</option>`
+              )
+              .join("")}</select><div class="row"><div><label>Map X</label><input id="editSimLocMapX" value="${Number(loc.map_x).toFixed(4)}" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"></div><div><label>Map Y</label><input id="editSimLocMapY" value="${Number(loc.map_y).toFixed(4)}" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"></div></div><div class="row"><button class="primary" onclick="event.stopPropagation(); saveSimLocation('${loc.id}')">Save</button><button onclick="event.stopPropagation(); mapClickMode='moveSimLoc'; setStatus('Click map to move this work location.')">Move on Map</button><button class="danger" onclick="event.stopPropagation(); deleteSimLocation('${loc.id}')">Delete</button></div>`
+          : "";
+        return `<div class="card ${sel ? "selected" : ""}" onclick="selectSimLocation('${loc.id}')"><h3>${escapeHtml(loc.name)}</h3><p>${meta.label} • ${meta.target} • map ${Number(loc.map_x).toFixed(3)}, ${Number(loc.map_y).toFixed(3)}</p>${editor}</div>`;
+      })
+      .join("");
+
+    section.innerHTML = `
+      <h3 style="margin:14px 0 6px">Work Locations</h3>
+      <p class="small muted">Point destinations for sim staff and vendors. They sit inside zones without changing zone access rules.</p>
+      <div class="row">
+        <div><label>Place as</label><select id="placeSimLocType" onchange="placeSimLocationType=this.value">${typeOptions}</select></div>
+      </div>
+      <p class="small">Click the map to place the selected work location type.</p>
+      <div class="list" id="accessWorkLocationList">${cards || '<p class="muted">No work locations yet. Pick a type and click the map.</p>'}</div>`;
+
+    const picker = document.getElementById("placeSimLocType");
+    if (picker) {
+      picker.value = placeSimLocationType;
+      picker.onchange = () => {
+        placeSimLocationType = picker.value;
+      };
+    }
+  }
+
+  window.selectSimLocation = function (id) {
+    selectedSimLocationId = id;
+    if (typeof selectedKind !== "undefined") {
+      selectedKind = "simLocation";
+      selectedId = id;
+    }
+    renderWorkLocationSection();
+    if (typeof drawBase === "function") drawBase();
+    setStatus("Selected work location.");
+  };
+
+  window.saveSimLocation = async function (id) {
+    if (!getDashEvent()) return;
+    const updated = await api(`/events/${getDashEvent().id}/sim-locations/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: document.getElementById("editSimLocName")?.value,
+        location_type: document.getElementById("editSimLocType")?.value,
+        map_x: parseFloat(document.getElementById("editSimLocMapX")?.value),
+        map_y: parseFloat(document.getElementById("editSimLocMapY")?.value),
+        updated_by: "dash_access",
+      }),
+    });
+    const idx = accessSimLocations.findIndex((l) => l.id === id);
+    if (idx >= 0) accessSimLocations[idx] = updated;
+    renderWorkLocationSection();
+    if (typeof drawBase === "function") drawBase();
+    setStatus(`Saved work location "${updated.name}".`);
+  };
+
+  window.deleteSimLocation = async function (id) {
+    if (!getDashEvent() || !confirm("Delete this work location?")) return;
+    await api(`/events/${getDashEvent().id}/sim-locations/${id}`, { method: "DELETE" });
+    accessSimLocations = accessSimLocations.filter((l) => l.id !== id);
+    if (selectedSimLocationId === id) selectedSimLocationId = null;
+    renderWorkLocationSection();
+    if (typeof drawBase === "function") drawBase();
+    setStatus("Deleted work location.");
+  };
 
   function updateRfidSectionVisibility() {
     const section = document.getElementById("accessRfidSection");
     if (section) section.classList.toggle("hidden", accessTool !== "rfidDevices");
+    updateWorkLocationSectionVisibility();
   }
 
   function syncPortalFlowFlipButton(gate) {
@@ -826,6 +969,7 @@
     const eventId = getDashEvent().id;
     accessBarriers = await api(`/events/${eventId}/access-barriers`);
     accessZones = await api(`/events/${eventId}/access-zones`);
+    accessSimLocations = await api(`/events/${eventId}/sim-locations`);
     renderAccessLists();
     if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
   }
@@ -842,10 +986,13 @@
       fillZone: "Click inside a barrier-enclosed area. Scanners complete the boundary (A↔B) so fill won't leak to the map edge.",
       linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
+      workLocations:
+        "Place staff/vendor work spots on the map. Sim routes staff and vendors here without creating nested zones.",
     };
     setStatus(hints[tool] || "Access control ready.");
     updateRfidSectionVisibility();
     if (tool === "rfidDevices" && typeof renderAccessRfidList === "function") renderAccessRfidList();
+    renderWorkLocationSection();
     updateAccessMapPanel();
     if (typeof drawBase === "function") drawBase();
   }
@@ -874,6 +1021,7 @@
     renderZoneEditor();
     if (accessTool === "rfidDevices" && typeof renderAccessRfidList === "function") renderAccessRfidList();
     else if (typeof renderAccessRfidList !== "function") renderPortalEditor();
+    renderWorkLocationSection();
   }
 
   function renderZoneEditor() {
@@ -1291,6 +1439,33 @@
       return true;
     }
 
+    if (accessTool === "workLocations") {
+      try {
+        const locationType =
+          document.getElementById("placeSimLocType")?.value || placeSimLocationType || "staff_spot";
+        placeSimLocationType = locationType;
+        const meta = SIM_LOCATION_META[locationType] || SIM_LOCATION_META.staff_spot;
+        const created = await api(`/events/${getDashEvent().id}/sim-locations`, {
+          method: "POST",
+          body: JSON.stringify({
+            name: meta.label,
+            location_type: locationType,
+            map_x: p.x,
+            map_y: p.y,
+            updated_by: "dash_access",
+          }),
+        });
+        accessSimLocations.push(created);
+        selectedSimLocationId = created.id;
+        renderWorkLocationSection();
+        if (typeof drawBase === "function") drawBase();
+        setStatus(`Placed ${meta.label} at ${p.x.toFixed(3)}, ${p.y.toFixed(3)}.`);
+      } catch (err) {
+        setStatus(err.message || String(err));
+      }
+      return true;
+    }
+
     return false;
   }
 
@@ -1320,6 +1495,7 @@
       applyAccessLayerVisibility();
       if (typeof currentTab !== "undefined" && currentTab === "access") {
         decorateGateMarkers();
+        drawSimLocationMarkers();
         drawAccessLayers();
       }
     };
@@ -1371,7 +1547,12 @@
         "click",
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
-          if (accessTool !== "drawBarrier" && accessTool !== "fillZone") return;
+          if (
+            accessTool !== "drawBarrier" &&
+            accessTool !== "fillZone" &&
+            accessTool !== "workLocations"
+          )
+            return;
           const p = mapXY(e);
           handleAccessMapClick(p).then((handled) => {
             if (handled) e.stopImmediatePropagation();
@@ -1412,6 +1593,7 @@
       accessLayerGates: "gates",
       accessLayerPois: "pois",
       accessLayerAnchors: "anchors",
+      accessLayerWorkLocs: "workLocations",
     };
     Object.entries(layerMap).forEach(([id, key]) => {
       const el = document.getElementById(id);

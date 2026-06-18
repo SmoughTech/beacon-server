@@ -66,6 +66,47 @@ class ScannerAccessUpdate(BaseModel):
     updated_by: Optional[str] = "dash_access"
 
 
+SIM_LOCATION_TYPES = (
+    "food_tent",
+    "food_trailer",
+    "staff_spot",
+    "staff_trailer",
+    "staff_tent",
+)
+
+SIM_LOCATION_LABELS = {
+    "food_tent": "Food Tent",
+    "food_trailer": "Food Trailer",
+    "staff_spot": "Staff Spot",
+    "staff_trailer": "Staff Trailer",
+    "staff_tent": "Staff Tent",
+}
+
+SIM_LOCATION_TARGET_CLASS = {
+    "food_tent": "vendor",
+    "food_trailer": "vendor",
+    "staff_spot": "staff",
+    "staff_trailer": "staff",
+    "staff_tent": "staff",
+}
+
+
+class SimLocationCreate(BaseModel):
+    name: str = Field(default="Staff Spot", min_length=1, max_length=120)
+    location_type: str = Field(default="staff_spot", max_length=40)
+    map_x: float = Field(ge=0.0, le=1.0)
+    map_y: float = Field(ge=0.0, le=1.0)
+    updated_by: Optional[str] = "dash_access"
+
+
+class SimLocationUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    location_type: Optional[str] = Field(default=None, max_length=40)
+    map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    updated_by: Optional[str] = "dash_access"
+
+
 def normalize_zone_class(value: Optional[str]) -> str:
     raw = (value or "ga").strip().lower()
     if raw not in ZONE_CLASSES:
@@ -85,6 +126,35 @@ def normalize_direction(value: Optional[str]) -> str:
     if raw not in {"bidirectional", "a_to_b", "b_to_a"}:
         raw = "bidirectional"
     return raw
+
+
+def normalize_sim_location_type(value: Optional[str]) -> str:
+    raw = (value or "staff_spot").strip().lower().replace(" ", "_")
+    if raw not in SIM_LOCATION_TYPES:
+        raw = "staff_spot"
+    return raw
+
+
+def sim_location_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    location_type = normalize_sim_location_type(row["location_type"])
+    target_class = SIM_LOCATION_TARGET_CLASS.get(location_type, "staff")
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "location_type": location_type,
+        "locationType": location_type,
+        "label": SIM_LOCATION_LABELS.get(location_type, location_type),
+        "target_class": target_class,
+        "targetClass": target_class,
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
 
 
 def resolve_fill_color(zone_class: str, requested: Optional[str]) -> str:
@@ -222,6 +292,28 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE wrstops_gates ADD COLUMN direction TEXT NOT NULL DEFAULT 'bidirectional'")
     if "barrier_id" not in gate_columns:
         conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_id TEXT")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sim_locations (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            location_type TEXT NOT NULL DEFAULT 'staff_spot',
+            map_x REAL NOT NULL,
+            map_y REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sim_locations_event_id
+        ON sim_locations(event_id)
+        """
+    )
 
 
 def register_access_control(app, get_connection: Callable, now_iso: Callable[[], str]) -> None:
@@ -522,6 +614,96 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
     @router.put("/events/{event_id}/wrstops-gates/{gate_id}/portal-access", include_in_schema=False)
     def update_gate_portal_access_legacy(event_id: str, gate_id: str, payload: ScannerAccessUpdate):
         return update_scanner_access(event_id, gate_id, payload)
+
+    @router.get("/events/{event_id}/sim-locations")
+    def list_sim_locations(event_id: str):
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM sim_locations
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
+        return [sim_location_row_to_dict(row) for row in rows]
+
+    @router.post("/events/{event_id}/sim-locations")
+    def create_sim_location(event_id: str, payload: SimLocationCreate):
+        location_type = normalize_sim_location_type(payload.location_type)
+        location_id = "loc_" + uuid4().hex[:12]
+        timestamp = now_iso()
+        default_name = SIM_LOCATION_LABELS.get(location_type, "Work Location")
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO sim_locations (
+                    id, event_id, name, location_type, map_x, map_y,
+                    created_at, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    location_id,
+                    event_id,
+                    payload.name.strip() or default_name,
+                    location_type,
+                    payload.map_x,
+                    payload.map_y,
+                    timestamp,
+                    timestamp,
+                    payload.updated_by,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM sim_locations WHERE id = ? AND event_id = ?",
+                (location_id, event_id),
+            ).fetchone()
+        return sim_location_row_to_dict(row)
+
+    @router.put("/events/{event_id}/sim-locations/{location_id}")
+    def update_sim_location(event_id: str, location_id: str, payload: SimLocationUpdate):
+        with get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM sim_locations WHERE id = ? AND event_id = ?",
+                (location_id, event_id),
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Work location not found")
+
+            location_type = (
+                normalize_sim_location_type(payload.location_type)
+                if payload.location_type is not None
+                else normalize_sim_location_type(existing["location_type"])
+            )
+            name = payload.name.strip() if payload.name is not None else existing["name"]
+            map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
+            map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+            timestamp = now_iso()
+            conn.execute(
+                """
+                UPDATE sim_locations
+                SET name = ?, location_type = ?, map_x = ?, map_y = ?, updated_at = ?, updated_by = ?
+                WHERE id = ? AND event_id = ?
+                """,
+                (name, location_type, map_x, map_y, timestamp, payload.updated_by, location_id, event_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM sim_locations WHERE id = ? AND event_id = ?",
+                (location_id, event_id),
+            ).fetchone()
+        return sim_location_row_to_dict(row)
+
+    @router.delete("/events/{event_id}/sim-locations/{location_id}")
+    def delete_sim_location(event_id: str, location_id: str):
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM sim_locations WHERE id = ? AND event_id = ?",
+                (location_id, event_id),
+            )
+            conn.commit()
+        return {"deleted": True, "id": location_id}
 
     app.include_router(router)
 
