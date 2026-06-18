@@ -31,11 +31,14 @@
 
   let accessBarriers = [];
   let accessZones = [];
+  let accessQueues = [];
   let accessTool = "select";
   let draftBarrierPoints = [];
   let draftBarrierClosed = false;
+  let draftQueuePoints = [];
   let selectedBarrierId = null;
   let selectedZoneId = null;
+  let selectedQueueId = null;
   let fillZoneClass = "ga";
   let portalHeadingPreview = null;
   let portalFlowFlipPreview = null;
@@ -56,6 +59,8 @@
     pois: true,
     anchors: true,
     workLocations: true,
+    tileGrid: true,
+    queues: true,
   };
   let accessSimLocations = [];
   let selectedSimLocationId = null;
@@ -104,6 +109,8 @@
       accessLayerPois: "pois",
       accessLayerAnchors: "anchors",
       accessLayerWorkLocs: "workLocations",
+      accessLayerTileGrid: "tileGrid",
+      accessLayerQueues: "queues",
     };
     Object.entries(map).forEach(([id, key]) => {
       const el = document.getElementById(id);
@@ -249,7 +256,44 @@
   function updateRfidSectionVisibility() {
     const section = document.getElementById("accessRfidSection");
     if (section) section.classList.toggle("hidden", accessTool !== "rfidDevices");
+    const queueSection = document.getElementById("accessQueueSection");
+    if (queueSection) queueSection.classList.toggle("hidden", accessTool !== "drawQueue");
     updateWorkLocationSectionVisibility();
+  }
+
+  function snapQueuePoint(p) {
+    const { gx, gy } = gridFromNorm(p.x, p.y);
+    return normFromGrid(gx, gy);
+  }
+
+  function drawTileGrid(svg) {
+    if (!accessLayers.tileGrid) return;
+    const stepX = SVG_W / (GRID_W - 1);
+    const stepY = SVG_H / (GRID_H - 1);
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "accessTileGrid");
+    g.style.pointerEvents = "none";
+    for (let gx = 0; gx < GRID_W; gx += 20) {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(gx * stepX));
+      line.setAttribute("y1", "0");
+      line.setAttribute("x2", String(gx * stepX));
+      line.setAttribute("y2", String(SVG_H));
+      line.setAttribute("stroke", "rgba(255,255,255,0.08)");
+      line.setAttribute("stroke-width", "1");
+      g.appendChild(line);
+    }
+    for (let gy = 0; gy < GRID_H; gy += 20) {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", "0");
+      line.setAttribute("y1", String(gy * stepY));
+      line.setAttribute("x2", String(SVG_W));
+      line.setAttribute("y2", String(gy * stepY));
+      line.setAttribute("stroke", "rgba(255,255,255,0.08)");
+      line.setAttribute("stroke-width", "1");
+      g.appendChild(line);
+    }
+    svg.appendChild(g);
   }
 
   function syncPortalFlowFlipButton(gate) {
@@ -943,6 +987,8 @@
     if (!svg) return;
     svg.innerHTML = "";
 
+    drawTileGrid(svg);
+
     accessZones.forEach((zone) => {
       if (!accessLayers.zones) return;
       const pts = zone.polygon || [];
@@ -985,6 +1031,59 @@
       };
       svg.appendChild(pl);
     });
+
+    accessQueues.forEach((queue) => {
+      if (!accessLayers.queues) return;
+      const pts = queue.points || [];
+      if (pts.length < 2) return;
+      const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      pl.setAttribute("fill", "none");
+      pl.setAttribute(
+        "points",
+        pts.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+      );
+      pl.setAttribute("stroke", selectedQueueId === queue.id ? "#80cbc4" : "#26c6da");
+      pl.setAttribute("stroke-width", selectedQueueId === queue.id ? "6" : "4");
+      pl.setAttribute("stroke-dasharray", "10 6");
+      pl.setAttribute("stroke-linecap", "round");
+      pl.setAttribute("stroke-linejoin", "round");
+      pl.style.pointerEvents = "stroke";
+      pl.onclick = (ev) => {
+        ev.stopPropagation();
+        selectAccessQueue(queue.id);
+      };
+      svg.appendChild(pl);
+      const head = pts[pts.length - 1];
+      const tail = pts[0];
+      [
+        { p: tail, label: "tail", fill: "#ffd166" },
+        { p: head, label: "scanner", fill: "#26c6da" },
+      ].forEach(({ p, fill }) => {
+        const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        dot.setAttribute("cx", String(p.x * SVG_W));
+        dot.setAttribute("cy", String(p.y * SVG_H));
+        dot.setAttribute("r", "5");
+        dot.setAttribute("fill", fill);
+        dot.setAttribute("stroke", "#0d1520");
+        dot.setAttribute("stroke-width", "1.5");
+        dot.style.pointerEvents = "none";
+        svg.appendChild(dot);
+      });
+    });
+
+    if (draftQueuePoints.length >= 1 && (accessLayers.queues || accessTool === "drawQueue")) {
+      const draft = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      draft.setAttribute("fill", "none");
+      draft.setAttribute(
+        "points",
+        draftQueuePoints.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+      );
+      draft.setAttribute("stroke", "#80deea");
+      draft.setAttribute("stroke-width", "4");
+      draft.setAttribute("stroke-dasharray", "6 4");
+      draft.style.pointerEvents = "none";
+      svg.appendChild(draft);
+    }
 
     if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
       const draftPts = draftBarrierPoints.slice();
@@ -1336,6 +1435,7 @@
     const eventId = getDashEvent().id;
     accessBarriers = await api(`/events/${eventId}/access-barriers`);
     accessZones = await api(`/events/${eventId}/access-zones`);
+    accessQueues = await api(`/events/${eventId}/access-queues`);
     accessSimLocations = await api(`/events/${eventId}/sim-locations`);
     renderAccessLists();
     if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
@@ -1345,12 +1445,15 @@
     accessTool = tool;
     draftBarrierPoints = [];
     draftBarrierClosed = false;
+    draftQueuePoints = [];
     document.querySelectorAll("[data-access-tool]").forEach((btn) => {
       btn.classList.toggle("primary", btn.dataset.accessTool === tool);
     });
     const hints = {
-      select: "Select barriers, zones, or scanners on the map or in the list.",
+      select: "Select barriers, zones, queues, or scanners on the map or in the list.",
       drawBarrier: "Trace a perimeter fence/barricade. Points snap to existing corners, edges, and scanner snap dots.",
+      drawQueue:
+        "Draw a queue line from the back of the line toward the scanner. Points snap to the 400×225 tile grid. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
       linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
@@ -1385,6 +1488,30 @@
           return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} vertices</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
         })
         .join("") || '<p class="muted">No zones yet.</p>';
+
+    const queueList = document.getElementById("accessQueueList");
+    if (queueList) {
+      queueList.innerHTML =
+        accessQueues
+          .map((q) => {
+            const gate = (getDashGates() || []).find((g) => g.id === q.gate_id);
+            const gateName = gate ? gate.name : q.gate_id;
+            return `<div class="card ${selectedQueueId === q.id ? "selected" : ""}" onclick="selectAccessQueue('${q.id}')"><h3>${escapeHtml(q.name)}</h3><p>${escapeHtml(gateName)} • ${(q.points || []).length} points</p><button class="danger" onclick="event.stopPropagation(); deleteAccessQueue('${q.id}')">Delete</button></div>`;
+          })
+          .join("") || '<p class="muted">No queue lines yet. Use Draw Queue after placing a scanner.</p>';
+    }
+
+    const gateSelect = document.getElementById("accessQueueGate");
+    if (gateSelect) {
+      const gates = getDashGates() || [];
+      gateSelect.innerHTML = gates
+        .map(
+          (g) =>
+            `<option value="${g.id}" ${selectedKind === "gate" && selectedId === g.id ? "selected" : ""}>${escapeHtml(g.name || g.id)}</option>`
+        )
+        .join("");
+      if (!gateSelect.value && gates[0]) gateSelect.value = gates[0].id;
+    }
 
     renderZoneEditor();
     if (accessTool === "rfidDevices" && typeof renderAccessRfidList === "function") renderAccessRfidList();
@@ -1601,6 +1728,64 @@
     draftBarrierClosed = false;
     drawAccessLayers();
     setStatus("Barrier drawing cancelled.");
+  };
+
+  window.finishDraftQueue = async function () {
+    if (!getDashEvent()) return;
+    if (draftQueuePoints.length < 2) {
+      setStatus("Add at least 2 queue points (back of line → scanner).");
+      return;
+    }
+    const gateId = document.getElementById("accessQueueGate")?.value;
+    if (!gateId) {
+      setStatus("Select a scanner for this queue line.");
+      return;
+    }
+    const name = document.getElementById("accessQueueName")?.value?.trim() || "Queue";
+    const created = await api(`/events/${getDashEvent().id}/access-queues`, {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        gate_id: gateId,
+        points: draftQueuePoints,
+        updated_by: "dash_access",
+      }),
+    });
+    draftQueuePoints = [];
+    accessQueues.push(created);
+    selectedQueueId = created.id;
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus(`Saved queue "${created.name}" for scanner.`);
+  };
+
+  window.cancelDraftQueue = function () {
+    draftQueuePoints = [];
+    drawAccessLayers();
+    setStatus("Queue drawing cancelled.");
+  };
+
+  window.selectAccessQueue = function (id) {
+    selectedQueueId = id;
+    selectedBarrierId = null;
+    selectedZoneId = null;
+    const queue = accessQueues.find((q) => q.id === id);
+    if (queue) {
+      const gateSelect = document.getElementById("accessQueueGate");
+      if (gateSelect) gateSelect.value = queue.gate_id;
+    }
+    renderAccessLists();
+    drawAccessLayers();
+  };
+
+  window.deleteAccessQueue = async function (id) {
+    if (!confirm("Delete this queue line?")) return;
+    await api(`/events/${getDashEvent().id}/access-queues/${id}`, { method: "DELETE" });
+    accessQueues = accessQueues.filter((q) => q.id !== id);
+    if (selectedQueueId === id) selectedQueueId = null;
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus("Deleted queue line.");
   };
 
   window.deleteAccessBarrier = async function (id) {
@@ -1821,6 +2006,19 @@
     if (accessTool === "drawBarrier") {
       const snapped = snapBarrierPoint(p, getDashGates());
       addDraftBarrierPoint({ x: snapped.x, y: snapped.y }, snapped);
+      return true;
+    }
+
+    if (accessTool === "drawQueue") {
+      const gates = getDashGates() || [];
+      if (!gates.length) {
+        setStatus("Place a scanner first, then draw the queue line toward it.");
+        return true;
+      }
+      const snapped = snapQueuePoint(p);
+      draftQueuePoints.push(snapped);
+      drawAccessLayers();
+      setStatus(`Queue point ${draftQueuePoints.length} (tile-snapped). Click Finish Queue when done.`);
       return true;
     }
 

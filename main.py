@@ -1136,7 +1136,7 @@ DASH_HTML = r'''
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
   <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
-  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
+  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
   <div class="dashSearch"><input id="dashSearchInput" placeholder="Search scanners, POIs, survey paths, anchors, device sweeps..." onkeydown="if(event.key==='Enter')dashSearch()" oninput="if(!this.value.trim())clearDashSearch()"><button class="primary" onclick="dashSearch()">Search</button><button class="ghost" onclick="clearDashSearch()">Clear</button><div id="dashSearchResults" class="searchResults"></div></div>
   <div class="layout">
@@ -1153,6 +1153,7 @@ DASH_HTML = r'''
         <div class="row">
           <button data-access-tool="select" class="primary" onclick="setAccessTool('select')">Select</button>
           <button data-access-tool="drawBarrier" onclick="setAccessTool('drawBarrier')">Draw Barrier</button>
+          <button data-access-tool="drawQueue" onclick="setAccessTool('drawQueue')">Draw Queue</button>
           <button data-access-tool="fillZone" onclick="setAccessTool('fillZone')">Fill Zone</button>
           <button data-access-tool="linkPortal" onclick="setAccessTool('linkPortal')">Access Rules</button>
           <button data-access-tool="rfidDevices" onclick="setAccessTool('rfidDevices')">Scanners</button><button data-access-tool="workLocations" onclick="setAccessTool('workLocations')">Work Locations</button>
@@ -1170,6 +1171,18 @@ DASH_HTML = r'''
           <button class="primary" onclick="finishDraftBarrier()">Finish Barrier</button>
           <button onclick="closeDraftBarrier()">Close Perimeter</button>
           <button onclick="cancelDraftBarrier()">Cancel Draw</button>
+        </div>
+        <div id="accessQueueSection" class="hidden" style="margin-top:10px">
+          <h3 style="margin:0 0 6px">Queue line</h3>
+          <p class="small">Click from the back of the line toward the scanner. Points snap to the 400×225 tile grid.</p>
+          <div class="row">
+            <div><label>Queue name</label><input id="accessQueueName" placeholder="North gate queue" /></div>
+            <div><label>Scanner</label><select id="accessQueueGate"></select></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="primary" onclick="finishDraftQueue()">Finish Queue</button>
+            <button onclick="cancelDraftQueue()">Cancel Draw</button>
+          </div>
         </div>
         <div class="row" style="margin-top:10px">
           <div><label>Zone name</label><input id="accessZoneName" placeholder="VIP Lawn" /></div>
@@ -1190,6 +1203,8 @@ DASH_HTML = r'''
         <div id="accessWorkLocationSection" class="hidden"></div>
         <h3 style="margin:14px 0 6px">Barriers</h3>
         <div class="list" id="accessBarrierList"></div>
+        <h3 style="margin:14px 0 6px">Queues</h3>
+        <div class="list" id="accessQueueList"></div>
         <h3 style="margin:14px 0 6px">Zones</h3>
         <div class="list" id="accessZoneList"></div>
         <div id="accessPortalEditor"></div>
@@ -1433,7 +1448,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.10.1"></script>
+<script src="/static/dash/access-control.js?v=3.11.0"></script>
 </body>
 </html>
 '''

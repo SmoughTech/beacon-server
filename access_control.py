@@ -59,6 +59,20 @@ class AccessZoneUpdate(BaseModel):
     updated_by: Optional[str] = "dash_access"
 
 
+class AccessQueueCreate(BaseModel):
+    name: str = Field(default="Queue", min_length=1, max_length=120)
+    gate_id: str = Field(min_length=1, max_length=80)
+    points: List[MapPoint] = Field(min_length=2)
+    updated_by: Optional[str] = "dash_access"
+
+
+class AccessQueueUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    gate_id: Optional[str] = Field(default=None, max_length=80)
+    points: Optional[List[MapPoint]] = Field(default=None, min_length=2)
+    updated_by: Optional[str] = "dash_access"
+
+
 class ScannerAccessUpdate(BaseModel):
     zone_a_id: Optional[str] = Field(default=None, max_length=80)
     zone_b_id: Optional[str] = Field(default=None, max_length=80)
@@ -228,6 +242,19 @@ def zone_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "gate_id": row["gate_id"],
+        "points": _json_to_points(row["points_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
 def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
     keys = row.keys()
     allowed_raw = row["allowed_classes"] if "allowed_classes" in keys else None
@@ -338,6 +365,26 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_sim_locations_event_id
         ON sim_locations(event_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_queue_polylines (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            gate_id TEXT NOT NULL,
+            points_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_access_queue_polylines_event_id
+        ON access_queue_polylines(event_id)
         """
     )
 
@@ -762,6 +809,104 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.commit()
         return {"deleted": True, "id": location_id}
+
+    @router.get("/events/{event_id}/access-queues")
+    def list_queues(event_id: str):
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM access_queue_polylines
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
+        return [queue_row_to_dict(row) for row in rows]
+
+    @router.post("/events/{event_id}/access-queues")
+    def create_queue(event_id: str, payload: AccessQueueCreate):
+        queue_id = "queue_" + uuid4().hex[:12]
+        timestamp = now_iso()
+        with get_connection() as conn:
+            gate = conn.execute(
+                "SELECT id FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                (payload.gate_id, event_id),
+            ).fetchone()
+            if gate is None:
+                raise HTTPException(status_code=400, detail="Scanner not found for queue")
+            conn.execute(
+                """
+                INSERT INTO access_queue_polylines (
+                    id, event_id, name, gate_id, points_json,
+                    created_at, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    queue_id,
+                    event_id,
+                    payload.name.strip() or "Queue",
+                    payload.gate_id,
+                    _points_to_json(payload.points),
+                    timestamp,
+                    timestamp,
+                    payload.updated_by,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_queue_polylines WHERE id = ? AND event_id = ?",
+                (queue_id, event_id),
+            ).fetchone()
+        return queue_row_to_dict(row)
+
+    @router.put("/events/{event_id}/access-queues/{queue_id}")
+    def update_queue(event_id: str, queue_id: str, payload: AccessQueueUpdate):
+        with get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM access_queue_polylines WHERE id = ? AND event_id = ?",
+                (queue_id, event_id),
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Queue not found")
+            if payload.gate_id is not None:
+                gate = conn.execute(
+                    "SELECT id FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                    (payload.gate_id, event_id),
+                ).fetchone()
+                if gate is None:
+                    raise HTTPException(status_code=400, detail="Scanner not found for queue")
+            name = payload.name.strip() if payload.name is not None else existing["name"]
+            gate_id = payload.gate_id if payload.gate_id is not None else existing["gate_id"]
+            points_json = (
+                _points_to_json(payload.points)
+                if payload.points is not None
+                else existing["points_json"]
+            )
+            timestamp = now_iso()
+            conn.execute(
+                """
+                UPDATE access_queue_polylines
+                SET name = ?, gate_id = ?, points_json = ?, updated_at = ?, updated_by = ?
+                WHERE id = ? AND event_id = ?
+                """,
+                (name, gate_id, points_json, timestamp, payload.updated_by, queue_id, event_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_queue_polylines WHERE id = ? AND event_id = ?",
+                (queue_id, event_id),
+            ).fetchone()
+        return queue_row_to_dict(row)
+
+    @router.delete("/events/{event_id}/access-queues/{queue_id}")
+    def delete_queue(event_id: str, queue_id: str):
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM access_queue_polylines WHERE id = ? AND event_id = ?",
+                (queue_id, event_id),
+            )
+            conn.commit()
+        return {"deleted": True, "id": queue_id}
 
     app.include_router(router)
 

@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 
-from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, sim_location_row_to_dict, zone_row_to_dict
+from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, queue_row_to_dict, sim_location_row_to_dict, zone_row_to_dict
 from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
 
 
@@ -74,12 +74,21 @@ def register_sim_layout(
                 """,
                 (event_id,),
             ).fetchall()
+            queue_rows = conn.execute(
+                """
+                SELECT * FROM access_queue_polylines
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
 
         barriers = [barrier_row_to_dict(row) for row in barrier_rows]
         zones = [zone_row_to_dict(row) for row in zone_rows]
         gates = [scanner_gate_row_to_dict(row) for row in gate_rows]
         anchors = [calibration_anchor_row_to_dict(row) for row in anchor_rows]
         sim_locations = [sim_location_row_to_dict(row) for row in sim_location_rows]
+        queue_polylines = [queue_row_to_dict(row) for row in queue_rows]
 
         grid = rasterize_walls(barriers, gates)
         navmesh_raw = navmesh_to_bytes(grid)
@@ -97,11 +106,15 @@ def register_sim_layout(
                 "y_range": [0.0, 1.0],
                 "navmesh_width": GRID_W,
                 "navmesh_height": GRID_H,
+                "tile_width": GRID_W,
+                "tile_height": GRID_H,
+                "tile_space": "grid",
             },
             "barriers": barriers,
             "zones": zones,
             "scanners": gates,
             "gates": gates,
+            "queue_polylines": queue_polylines,
             "calibration_anchors": anchors,
             "sim_locations": sim_locations,
             "navmesh": {
