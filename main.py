@@ -10,9 +10,18 @@ import math
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from access_control import enrich_scanner_gate_dict, init_access_control_db, register_access_control
+from access_control import (
+    barrier_row_to_dict,
+    enrich_scanner_gate_dict,
+    init_access_control_db,
+    path_row_to_dict,
+    queue_row_to_dict,
+    register_access_control,
+    zone_row_to_dict,
+)
 
 enrich_wrstops_gate_dict = enrich_scanner_gate_dict
+from sim_engine import register_sim_engine
 from sim_layout import register_sim_layout
 
 
@@ -1072,6 +1081,17 @@ register_sim_layout(
     calibration_anchor_row_to_dict,
 )
 
+register_sim_engine(
+    app,
+    get_connection,
+    get_event_config,
+    barrier_row_to_dict,
+    zone_row_to_dict,
+    wrstops_gate_row_to_dict,
+    queue_row_to_dict,
+    path_row_to_dict,
+)
+
 
 @app.get("/maps/status")
 def maps_status():
@@ -1134,7 +1154,7 @@ DASH_HTML = r'''
 <body>
 <div class="app">
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
-  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
+  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="sim">Crowd Sim</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
   <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (2ft, 400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
@@ -1147,6 +1167,22 @@ DASH_HTML = r'''
       <section id="tab-deviceSweeps" class="hidden"><p class="muted">Device Sweep blobs are saved from the Android map-side Device Sweeper. Select a saved sweep to inspect it, or view all as a cleaner overlay.</p><div class="row"><button onclick="loadDeviceSweeps()">Refresh</button><button id="dsBleBtn" onclick="setDeviceSweepMode('BLE')">BLE</button><button id="dsWifiBtn" onclick="setDeviceSweepMode('WIFI')">Wi-Fi</button><button id="dsReadableBtn" onclick="setDeviceSweepView('readable')">Readable</button><button id="dsRangeBtn" onclick="setDeviceSweepView('range')">Range</button><button onclick="viewAllDeviceSweeps()">View All</button><button class="ghost" onclick="selectedDeviceSweepId=null; deviceSweepShowAll=false; renderDeviceSweepList(); drawDeviceSweeps();">Hide Blobs</button></div><br /><div class="list" id="deviceSweepList"></div></section>
       <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
       <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button><button onclick="inferCalibrationGpsFromMap()">Infer GPS from Selected Map Point</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section><section id="tab-messages" class="hidden"><p class="muted">Field-test message board. Use this for bug reports, feature requests, notes, or test feedback.</p><div class="card"><label>Name</label><input id="msgName" placeholder="Your name" /><label>Subject</label><input id="msgSubject" placeholder="Bug, idea, question..." /><label>Body</label><textarea id="msgBody" placeholder="What happened? What should change?" style="width:100%;min-height:120px;background:#0d1520;color:#f7fbff;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:10px;"></textarea><div class="row"><button class="primary" onclick="postMessageBoard()">Post Message</button><button onclick="loadMessageBoard()">Refresh</button></div></div><div class="list" id="messageList"></div></section>
+      <section id="tab-sim" class="hidden">
+        <p class="muted">Tile-native crowd sim. Guests follow painted paths, queue at scanners, then spread into their zone area tiles.</p>
+        <div class="row">
+          <div><label>GA guests</label><input id="simGaCount" type="number" min="0" max="500" value="30" /></div>
+          <div><label>VIP guests</label><input id="simVipCount" type="number" min="0" max="200" value="0" /></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div><label>Spawn interval (ticks)</label><input id="simSpawnInterval" type="number" min="1" max="600" value="12" /></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" onclick="simReset()">Reset &amp; Spawn</button>
+          <button id="simPlayBtn" class="good" onclick="simTogglePlay()">Play</button>
+          <button class="ghost" onclick="simReloadLayout()">Reload layout</button>
+        </div>
+        <div id="simStats" class="small muted" style="margin-top:10px">Not running.</div>
+      </section>
       <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button class="primary" onclick="startAddPoi()">+ POI</button></div><br /><div id="dataList" class="list"></div></section>
       <section id="tab-access" class="hidden">
         <p class="muted">Place scanners, draw fences, flood-fill zones, then set access rules.</p>
@@ -1279,7 +1315,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',sim:'Crowd Sim',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(typeof onSimTabChange==='function')onSimTabChange(tab); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration')loadAnchors(); if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout(); if(tab==='sim'&&typeof loadSimPanel==='function')loadSimPanel();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId)){el.classList.add('selected'); if(dashSearchMatches.length)el.classList.add('searchHit');} el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} getMapStage().appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -1478,6 +1514,7 @@ async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))retur
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
 <script src="/static/dash/access-control.js?v=3.13.4"></script>
+<script src="/static/dash/crowd-sim.js?v=1.0.0"></script>
 </body>
 </html>
 '''
