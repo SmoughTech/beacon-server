@@ -270,13 +270,17 @@
     setStatus("Deleted work location.");
   };
 
-  function updateRfidSectionVisibility() {
+  function syncAccessToolPanels() {
     const section = document.getElementById("accessRfidSection");
     if (section) section.classList.toggle("hidden", accessTool !== "rfidDevices");
+    const barrierEditor = document.getElementById("accessBarrierSection");
+    if (barrierEditor) barrierEditor.classList.toggle("hidden", accessTool !== "drawBarrier");
     const queueSection = document.getElementById("accessQueueSection");
     if (queueSection) queueSection.classList.toggle("hidden", accessTool !== "drawQueue");
     const pathSection = document.getElementById("accessPathSection");
     if (pathSection) pathSection.classList.toggle("hidden", accessTool !== "drawPath");
+    const zoneEditor = document.getElementById("accessZoneSection");
+    if (zoneEditor) zoneEditor.classList.toggle("hidden", accessTool !== "fillZone");
     updateWorkLocationSectionVisibility();
   }
 
@@ -366,10 +370,10 @@
       rect.setAttribute("y", String(ty * stepY));
       rect.setAttribute("width", String(stepX));
       rect.setAttribute("height", String(stepY));
-      rect.setAttribute("fill", fill);
-      rect.setAttribute("stroke", stroke);
-      rect.setAttribute("stroke-width", selected ? "1.5" : "1");
-      rect.setAttribute("opacity", "0.85");
+      rect.style.fill = fill;
+      rect.style.stroke = stroke;
+      rect.style.strokeWidth = selected ? "1.5" : "1";
+      rect.style.opacity = "0.85";
       g.appendChild(rect);
     });
     svg.appendChild(g);
@@ -1112,7 +1116,7 @@
       svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.id = "zoneSvg";
       svg.setAttribute("viewBox", `0 0 ${SVG_W} ${SVG_H}`);
-      svg.classList.add("pathLine");
+      svg.classList.add("accessOverlay");
       svg.style.pointerEvents = "none";
       wrap.appendChild(svg);
     }
@@ -1359,15 +1363,10 @@
           rect.setAttribute("y", String(ty * stepY));
           rect.setAttribute("width", String(stepX));
           rect.setAttribute("height", String(stepY));
-          rect.setAttribute(
-            "fill",
-            selectedBarrierId === barrier.id ? "rgba(109,247,167,0.55)" : "rgba(255,138,101,0.72)"
-          );
-          rect.setAttribute(
-            "stroke",
-            selectedBarrierId === barrier.id ? "#6df7a7" : "#ff8a65"
-          );
-          rect.setAttribute("stroke-width", selectedBarrierId === barrier.id ? "1.5" : "1");
+          rect.style.fill =
+            selectedBarrierId === barrier.id ? "rgba(109,247,167,0.55)" : "rgba(255,138,101,0.72)";
+          rect.style.stroke = selectedBarrierId === barrier.id ? "#6df7a7" : "#ff8a65";
+          rect.style.strokeWidth = selectedBarrierId === barrier.id ? "1.5" : "1";
           wrap.appendChild(rect);
         });
         svg.appendChild(wrap);
@@ -1461,8 +1460,8 @@
       drawBarrierTileRects(
         svg,
         allDraftPathTileKeys(),
-        "#ffd166",
-        "rgba(255,209,102,0.62)",
+        "#26a69a",
+        "rgba(38,166,154,0.72)",
         true
       );
     }
@@ -1480,8 +1479,8 @@
       drawBarrierTileRects(
         wrap,
         keys,
-        selectedPathId === path.id ? "#6df7a7" : "#ffd166",
-        selectedPathId === path.id ? "rgba(109,247,167,0.48)" : "rgba(255,209,102,0.38)",
+        selectedPathId === path.id ? "#6df7a7" : "#26a69a",
+        selectedPathId === path.id ? "rgba(109,247,167,0.55)" : "rgba(38,166,154,0.48)",
         selectedPathId === path.id
       );
       svg.appendChild(wrap);
@@ -1653,7 +1652,7 @@
 
   function decorateGateDragHandles() {
     document.querySelectorAll(".gateDragHandle").forEach((d) => d.remove());
-    if (!accessLayers.gates || accessTool === "drawBarrier") return;
+    if (!accessLayers.gates || accessTool === "drawBarrier" || accessTool === "drawPath") return;
 
     (getDashGates() || []).forEach((gate) => {
       const el = document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
@@ -1877,11 +1876,20 @@
         "Place staff/vendor work spots on the map. Sim routes staff and vendors here without creating nested zones.",
     };
     setStatus(hints[tool] || "Access control ready.");
-    updateRfidSectionVisibility();
+    syncAccessToolPanels();
+    const toolPanelIds = {
+      drawBarrier: "accessBarrierSection",
+      drawPath: "accessPathSection",
+      drawQueue: "accessQueueSection",
+      fillZone: "accessZoneSection",
+    };
+    const toolPanel = document.getElementById(toolPanelIds[tool]);
+    if (toolPanel) toolPanel.scrollIntoView({ block: "nearest", behavior: "smooth" });
     if (tool === "rfidDevices" && typeof renderAccessRfidList === "function") renderAccessRfidList();
     renderWorkLocationSection();
     updateAccessMapPanel();
     if (typeof drawBase === "function") drawBase();
+    if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
   }
 
   function renderAccessLists() {
@@ -1895,7 +1903,7 @@
           (b) =>
             `<div class="card ${selectedBarrierId === b.id ? "selected" : ""}" onclick="selectAccessBarrier('${b.id}')"><h3>${escapeHtml(b.name)}</h3><p>${escapeHtml(b.barrier_type)} • ${(b.points || []).length} points${b.closed ? " • closed perimeter" : ""}</p><button class="danger" onclick="event.stopPropagation(); deleteAccessBarrier('${b.id}')">Delete</button></div>`
         )
-        .join("") || '<p class="muted">No barriers yet.</p>';
+        .join("") || '<p class="muted">No barriers yet. <button class="ghost" onclick="setAccessTool(\'drawBarrier\')">Draw Barrier</button></p>';
 
     const pathList = document.getElementById("accessPathList");
     if (pathList) {
@@ -1905,7 +1913,7 @@
             const width = path.width_tiles || path.widthTiles || 1;
             return `<div class="card ${selectedPathId === path.id ? "selected" : ""}" onclick="selectAccessPath('${path.id}')"><h3>${escapeHtml(path.name)}</h3><p>${pathWidthLabel(width)} • ${(path.tiles || []).length} tiles</p><button class="danger" onclick="event.stopPropagation(); deleteAccessPath('${path.id}')">Delete</button></div>`;
           })
-          .join("") || '<p class="muted">No guest paths yet. Use Draw Path to paint corridors.</p>';
+          .join("") || '<p class="muted">No guest paths yet. <button class="ghost" onclick="setAccessTool(\'drawPath\')">Draw Path</button></p>';
     }
 
     zoneList.innerHTML =
@@ -1914,7 +1922,7 @@
           const swatch = z.fill_color || ZONE_COLORS[z.zone_class] || ZONE_COLORS.ga;
           return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} vertices</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
         })
-        .join("") || '<p class="muted">No zones yet.</p>';
+        .join("") || '<p class="muted">No zones yet. <button class="ghost" onclick="setAccessTool(\'fillZone\')">Fill Zone</button></p>';
 
     const queueList = document.getElementById("accessQueueList");
     if (queueList) {
@@ -1925,7 +1933,7 @@
             const gateName = gate ? gate.name : q.gate_id;
             return `<div class="card ${selectedQueueId === q.id ? "selected" : ""}" onclick="selectAccessQueue('${q.id}')"><h3>${escapeHtml(q.name)}</h3><p>${escapeHtml(gateName)} • ${(q.points || []).length} points</p><button class="danger" onclick="event.stopPropagation(); deleteAccessQueue('${q.id}')">Delete</button></div>`;
           })
-          .join("") || '<p class="muted">No queue lines yet. Use Draw Queue after placing a scanner.</p>';
+          .join("") || '<p class="muted">No queue lines yet. <button class="ghost" onclick="setAccessTool(\'drawQueue\')">Draw Queue</button></p>';
     }
 
     const gateSelect = document.getElementById("accessQueueGate");
@@ -2209,23 +2217,27 @@
     }
     const name = document.getElementById("accessPathName")?.value?.trim() || "Path";
     const width_tiles = getPathBrushWidth();
-    const created = await api(`/events/${getDashEvent().id}/access-paths`, {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        width_tiles,
-        tiles: tilesToPayloadList(draftPathTiles),
-        updated_by: "dash_access",
-      }),
-    });
-    draftPathTiles = new Set();
-    pathDragState = null;
-    pathDragPreviewTiles = new Set();
-    accessPaths.push(created);
-    selectedPathId = created.id;
-    renderAccessLists();
-    drawAccessLayers();
-    setStatus(`Saved guest path "${created.name}" (${created.tiles?.length || 0} tiles, ${pathWidthLabel(width_tiles)}).`);
+    try {
+      const created = await api(`/events/${getDashEvent().id}/access-paths`, {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          width_tiles,
+          tiles: tilesToPayloadList(draftPathTiles),
+          updated_by: "dash_access",
+        }),
+      });
+      draftPathTiles = new Set();
+      pathDragState = null;
+      pathDragPreviewTiles = new Set();
+      accessPaths.push(created);
+      selectedPathId = created.id;
+      renderAccessLists();
+      drawAccessLayers();
+      setStatus(`Saved guest path "${created.name}" (${created.tiles?.length || 0} tiles, ${pathWidthLabel(width_tiles)}).`);
+    } catch (err) {
+      setStatus(`Save path failed: ${err.message || err}`);
+    }
   };
 
   window.deleteAccessPath = async function (id) {
