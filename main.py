@@ -1165,7 +1165,8 @@ DASH_HTML = r'''
         <div class="list" id="accessRfidList" style="margin-top:8px"></div>
         </div>
         <div id="accessWorkLocationSection" class="hidden"></div>
-        <div class="accessSection">
+        <p id="accessSectionHint" class="muted">Pick a tool above — Draw Barrier, Draw Path, Draw Queue, or Fill Zone — or click an item on the map.</p>
+        <div id="accessSectionBarriers" class="accessSection hidden">
           <h3>Barriers</h3>
           <div id="accessBarrierSection" class="accessToolPanel hidden">
             <div class="row">
@@ -1181,7 +1182,7 @@ DASH_HTML = r'''
           </div>
           <div class="list" id="accessBarrierList"></div>
         </div>
-        <div class="accessSection">
+        <div id="accessSectionPaths" class="accessSection hidden">
           <h3>Paths</h3>
           <div id="accessPathSection" class="accessToolPanel hidden">
             <p class="small" style="margin:0 0 8px">Drag to paint preferred movement corridors. Width is in 2ft tiles (1 = 2ft, 2 = 4ft, 4 = 8ft).</p>
@@ -1197,7 +1198,7 @@ DASH_HTML = r'''
           </div>
           <div class="list" id="accessPathList"></div>
         </div>
-        <div class="accessSection">
+        <div id="accessSectionQueues" class="accessSection hidden">
           <h3>Queues</h3>
           <div id="accessQueueSection" class="accessToolPanel hidden">
             <p class="small" style="margin:0 0 8px">Click from the back of the line toward the scanner. Points snap to the 400×225 tile grid.</p>
@@ -1212,7 +1213,7 @@ DASH_HTML = r'''
           </div>
           <div class="list" id="accessQueueList"></div>
         </div>
-        <div class="accessSection">
+        <div id="accessSectionZones" class="accessSection hidden">
           <h3>Zones</h3>
           <div id="accessZoneSection" class="accessToolPanel hidden">
             <div class="row">
@@ -1234,7 +1235,7 @@ DASH_HTML = r'''
           <div id="accessZoneEditor"></div>
           <div class="list" id="accessZoneList"></div>
         </div>
-        <p class="small">Use the layer toggles on the left to hide map clutter. Select a scanner, then use the fence heading slider to rotate snap points.</p>
+        <p id="accessLayoutFooter" class="small hidden">Use the layer toggles on the left to hide map clutter. Select a scanner, then use the fence heading slider to rotate snap points.</p>
         <div id="accessPortalEditor"></div>
       </section>
     </div></div>
@@ -1476,7 +1477,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.13.2"></script>
+<script src="/static/dash/access-control.js?v=3.13.3"></script>
 </body>
 </html>
 '''

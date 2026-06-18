@@ -270,9 +270,73 @@
     setStatus("Deleted work location.");
   };
 
+  function enterSelectCategory(category, id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
+    selectedBarrierId = category === "barriers" ? id : null;
+    selectedPathId = category === "paths" ? id : null;
+    selectedQueueId = category === "queues" ? id : null;
+    selectedZoneId = category === "zones" ? id : null;
+    syncAccessToolPanels();
+  }
+
+  function syncAccessToolbarButtons() {
+    document.querySelectorAll("[data-access-tool]").forEach((btn) => {
+      btn.classList.toggle("primary", btn.dataset.accessTool === accessTool);
+    });
+  }
+
+  function isAccessCategoryVisible(category) {
+    if (accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal") {
+      return false;
+    }
+    const toolByCategory = {
+      barriers: "drawBarrier",
+      paths: "drawPath",
+      queues: "drawQueue",
+      zones: "fillZone",
+    };
+    const selectedByCategory = {
+      barriers: selectedBarrierId,
+      paths: selectedPathId,
+      queues: selectedQueueId,
+      zones: selectedZoneId,
+    };
+    if (accessTool === toolByCategory[category]) return true;
+    if (accessTool === "select" && selectedByCategory[category]) return true;
+    return false;
+  }
+
   function syncAccessToolPanels() {
-    const section = document.getElementById("accessRfidSection");
-    if (section) section.classList.toggle("hidden", accessTool !== "rfidDevices");
+    const rfidSection = document.getElementById("accessRfidSection");
+    if (rfidSection) rfidSection.classList.toggle("hidden", accessTool !== "rfidDevices");
+
+    const sectionIds = {
+      barriers: "accessSectionBarriers",
+      paths: "accessSectionPaths",
+      queues: "accessSectionQueues",
+      zones: "accessSectionZones",
+    };
+    Object.entries(sectionIds).forEach(([category, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle("hidden", !isAccessCategoryVisible(category));
+    });
+
+    const anyCategoryVisible = Object.keys(sectionIds).some((category) => isAccessCategoryVisible(category));
+    const hint = document.getElementById("accessSectionHint");
+    if (hint) {
+      hint.classList.toggle(
+        "hidden",
+        anyCategoryVisible || accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal"
+      );
+    }
+
+    const footer = document.getElementById("accessLayoutFooter");
+    if (footer) footer.classList.toggle("hidden", !anyCategoryVisible);
+
+    const portalEditor = document.getElementById("accessPortalEditor");
+    if (portalEditor) portalEditor.classList.toggle("hidden", accessTool !== "linkPortal");
+
     const barrierEditor = document.getElementById("accessBarrierSection");
     if (barrierEditor) barrierEditor.classList.toggle("hidden", accessTool !== "drawBarrier");
     const queueSection = document.getElementById("accessQueueSection");
@@ -281,6 +345,7 @@
     if (pathSection) pathSection.classList.toggle("hidden", accessTool !== "drawPath");
     const zoneEditor = document.getElementById("accessZoneSection");
     if (zoneEditor) zoneEditor.classList.toggle("hidden", accessTool !== "fillZone");
+
     updateWorkLocationSectionVisibility();
   }
 
@@ -1846,11 +1911,39 @@
     }
     accessSimLocations = await api(`/events/${eventId}/sim-locations`);
     renderAccessLists();
+    syncAccessToolPanels();
     if (typeof currentTab !== "undefined" && currentTab === "access") drawAccessLayers();
   }
 
   function setAccessTool(tool) {
     accessTool = tool;
+    if (tool === "select") {
+      selectedBarrierId = null;
+      selectedZoneId = null;
+      selectedQueueId = null;
+      selectedPathId = null;
+    } else if (tool === "drawBarrier") {
+      selectedZoneId = null;
+      selectedQueueId = null;
+      selectedPathId = null;
+    } else if (tool === "drawPath") {
+      selectedBarrierId = null;
+      selectedZoneId = null;
+      selectedQueueId = null;
+    } else if (tool === "drawQueue") {
+      selectedBarrierId = null;
+      selectedZoneId = null;
+      selectedPathId = null;
+    } else if (tool === "fillZone") {
+      selectedBarrierId = null;
+      selectedQueueId = null;
+      selectedPathId = null;
+    } else if (tool === "rfidDevices" || tool === "linkPortal" || tool === "workLocations") {
+      selectedBarrierId = null;
+      selectedZoneId = null;
+      selectedQueueId = null;
+      selectedPathId = null;
+    }
     draftBarrierPoints = [];
     draftBarrierTiles = new Set();
     draftBarrierClosed = false;
@@ -1860,9 +1953,7 @@
     pathDragState = null;
     pathDragPreviewTiles = new Set();
     draftQueuePoints = [];
-    document.querySelectorAll("[data-access-tool]").forEach((btn) => {
-      btn.classList.toggle("primary", btn.dataset.accessTool === tool);
-    });
+    syncAccessToolbarButtons();
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
       drawBarrier: "Drag on the map to paint barrier tiles (2ft each). Release and drag again to extend. Finish when done.",
@@ -1877,6 +1968,7 @@
     };
     setStatus(hints[tool] || "Access control ready.");
     syncAccessToolPanels();
+    renderAccessLists();
     const toolPanelIds = {
       drawBarrier: "accessBarrierSection",
       drawPath: "accessPathSection",
@@ -1903,7 +1995,7 @@
           (b) =>
             `<div class="card ${selectedBarrierId === b.id ? "selected" : ""}" onclick="selectAccessBarrier('${b.id}')"><h3>${escapeHtml(b.name)}</h3><p>${escapeHtml(b.barrier_type)} • ${(b.points || []).length} points${b.closed ? " • closed perimeter" : ""}</p><button class="danger" onclick="event.stopPropagation(); deleteAccessBarrier('${b.id}')">Delete</button></div>`
         )
-        .join("") || '<p class="muted">No barriers yet. <button class="ghost" onclick="setAccessTool(\'drawBarrier\')">Draw Barrier</button></p>';
+        .join("") || '<p class="muted">No barriers yet.</p>';
 
     const pathList = document.getElementById("accessPathList");
     if (pathList) {
@@ -1913,7 +2005,7 @@
             const width = path.width_tiles || path.widthTiles || 1;
             return `<div class="card ${selectedPathId === path.id ? "selected" : ""}" onclick="selectAccessPath('${path.id}')"><h3>${escapeHtml(path.name)}</h3><p>${pathWidthLabel(width)} • ${(path.tiles || []).length} tiles</p><button class="danger" onclick="event.stopPropagation(); deleteAccessPath('${path.id}')">Delete</button></div>`;
           })
-          .join("") || '<p class="muted">No guest paths yet. <button class="ghost" onclick="setAccessTool(\'drawPath\')">Draw Path</button></p>';
+          .join("") || '<p class="muted">No guest paths yet.</p>';
     }
 
     zoneList.innerHTML =
@@ -1922,7 +2014,7 @@
           const swatch = z.fill_color || ZONE_COLORS[z.zone_class] || ZONE_COLORS.ga;
           return `<div class="card ${selectedZoneId === z.id ? "selected" : ""}" onclick="selectAccessZone('${z.id}')"><div class="row" style="align-items:center;gap:10px"><span class="zoneColorSwatch" style="background:${swatch}"></span><div><h3>${escapeHtml(z.name)}</h3><p>${zoneLabel(z.zone_class)} • ${(z.polygon || []).length} vertices</p></div></div><button class="danger" onclick="event.stopPropagation(); deleteAccessZone('${z.id}')">Delete</button></div>`;
         })
-        .join("") || '<p class="muted">No zones yet. <button class="ghost" onclick="setAccessTool(\'fillZone\')">Fill Zone</button></p>';
+        .join("") || '<p class="muted">No zones yet.</p>';
 
     const queueList = document.getElementById("accessQueueList");
     if (queueList) {
@@ -1933,7 +2025,7 @@
             const gateName = gate ? gate.name : q.gate_id;
             return `<div class="card ${selectedQueueId === q.id ? "selected" : ""}" onclick="selectAccessQueue('${q.id}')"><h3>${escapeHtml(q.name)}</h3><p>${escapeHtml(gateName)} • ${(q.points || []).length} points</p><button class="danger" onclick="event.stopPropagation(); deleteAccessQueue('${q.id}')">Delete</button></div>`;
           })
-          .join("") || '<p class="muted">No queue lines yet. <button class="ghost" onclick="setAccessTool(\'drawQueue\')">Draw Queue</button></p>';
+          .join("") || '<p class="muted">No queue lines yet.</p>';
     }
 
     const gateSelect = document.getElementById("accessQueueGate");
@@ -2076,20 +2168,27 @@
   }
 
   function selectBarrier(id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
     selectedBarrierId = id;
     selectedZoneId = null;
     selectedPathId = null;
+    selectedQueueId = null;
     portalHeadingPreview = null;
     portalFlowFlipPreview = null;
+    syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
     setStatus("Selected barrier.");
   }
 
   function selectZone(id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
     selectedZoneId = id;
     selectedBarrierId = null;
     selectedPathId = null;
+    selectedQueueId = null;
     portalHeadingPreview = null;
     portalFlowFlipPreview = null;
     const zone = accessZones.find((z) => z.id === id);
@@ -2102,6 +2201,7 @@
       fillZoneClass = zone.zone_class;
       setFillColorInputs(parsed.color, parsed.opacity);
     }
+    syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
     setStatus("Selected zone.");
@@ -2111,6 +2211,8 @@
   window.selectAccessZone = selectZone;
 
   function selectPath(id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
     selectedPathId = id;
     selectedBarrierId = null;
     selectedZoneId = null;
@@ -2124,6 +2226,7 @@
       if (nameEl) nameEl.value = path.name;
       pathBrushWidth = width;
     }
+    syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
     setStatus("Selected guest path.");
@@ -2178,6 +2281,7 @@
     barrierDragState = null;
     barrierDragPreviewTiles = new Set();
     accessBarriers.push(created);
+    enterSelectCategory("barriers", created.id);
     renderAccessLists();
     drawAccessLayers();
     setStatus(`Saved tile barrier "${created.name}" (${created.tiles?.length || 0} tiles).`);
@@ -2231,7 +2335,7 @@
       pathDragState = null;
       pathDragPreviewTiles = new Set();
       accessPaths.push(created);
-      selectedPathId = created.id;
+      enterSelectCategory("paths", created.id);
       renderAccessLists();
       drawAccessLayers();
       setStatus(`Saved guest path "${created.name}" (${created.tiles?.length || 0} tiles, ${pathWidthLabel(width_tiles)}).`);
@@ -2273,7 +2377,7 @@
     });
     draftQueuePoints = [];
     accessQueues.push(created);
-    selectedQueueId = created.id;
+    enterSelectCategory("queues", created.id);
     renderAccessLists();
     drawAccessLayers();
     setStatus(`Saved queue "${created.name}" for scanner.`);
@@ -2286,6 +2390,8 @@
   };
 
   window.selectAccessQueue = function (id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
     selectedQueueId = id;
     selectedBarrierId = null;
     selectedZoneId = null;
@@ -2295,8 +2401,10 @@
       const gateSelect = document.getElementById("accessQueueGate");
       if (gateSelect) gateSelect.value = queue.gate_id;
     }
+    syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
+    setStatus("Selected queue line.");
   };
 
   window.deleteAccessQueue = async function (id) {
@@ -2344,7 +2452,7 @@
       }),
     });
     accessZones.push(created);
-    selectedZoneId = created.id;
+    enterSelectCategory("zones", created.id);
     renderAccessLists();
     drawAccessLayers();
     setStatus(`Saved ${zoneLabel(created.zone_class)} zone "${created.name}".`);
