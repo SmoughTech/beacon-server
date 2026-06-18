@@ -105,8 +105,9 @@ def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
 
 
 def _gate_admits(gate: dict[str, Any], ticket_class: str, target_zone_id: str | None) -> bool:
-    allowed = gate.get("allowed_classes") or []
-    if allowed and ticket_class not in allowed:
+    allowed = [str(c).strip().lower() for c in (gate.get("allowed_classes") or []) if c]
+    tc = ticket_class.strip().lower()
+    if allowed and tc not in allowed:
         return False
     if not target_zone_id:
         return True
@@ -151,6 +152,21 @@ class CrowdSimEngine:
         self._area_tiles_by_zone = self._index_area_tiles()
 
     def _collect_spawn_tiles(self) -> list[tuple[int, int]]:
+        gate_tiles: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for gate in self.gates:
+            gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+            for dx in range(-24, 25):
+                for dy in range(-24, 25):
+                    tx, ty = gx + dx, gy + dy
+                    if not self.passable(tx, ty) or self.surface[ty][tx] == SURFACE_AREA:
+                        continue
+                    if (tx, ty) in seen:
+                        continue
+                    seen.add((tx, ty))
+                    gate_tiles.append((tx, ty))
+        if gate_tiles:
+            return gate_tiles
         tiles: list[tuple[int, int]] = []
         for ty in range(TILE_ROWS):
             for tx in range(TILE_COLS):
@@ -159,7 +175,7 @@ class CrowdSimEngine:
                 if self.surface[ty][tx] == SURFACE_AREA:
                     continue
                 tiles.append((tx, ty))
-        return tiles or [(0, TILE_ROWS - 1)]
+        return tiles or [(TILE_COLS // 2, TILE_ROWS - 1)]
 
     def _index_area_tiles(self) -> dict[str, list[tuple[int, int]]]:
         indexed: dict[str, list[tuple[int, int]]] = {}
@@ -235,12 +251,57 @@ class CrowdSimEngine:
             return 1
         return OFF_PATH_STEP_COST
 
+    def nearest_passable(self, tx: int, ty: int, max_radius: int = 16) -> tuple[int, int] | None:
+        if self.passable(tx, ty):
+            return tx, ty
+        for radius in range(1, max_radius + 1):
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if max(abs(dx), abs(dy)) != radius:
+                        continue
+                    nx, ny = tx + dx, ty + dy
+                    if self.passable(nx, ny):
+                        return nx, ny
+        return None
+
+    def resolve_goal(self, goal: tuple[int, int]) -> tuple[int, int]:
+        resolved = self.nearest_passable(goal[0], goal[1])
+        return resolved if resolved else goal
+
+    def greedy_step_toward(
+        self,
+        agent: SimAgent,
+        occ: dict[tuple[int, int], int],
+    ) -> bool:
+        if not agent.goal:
+            return False
+        pos = (agent.tx, agent.ty)
+        if pos == agent.goal:
+            return False
+        best: tuple[int, int] | None = None
+        best_score = 10**9
+        for dx, dy in DIRS:
+            nx, ny = agent.tx + dx, agent.ty + dy
+            if not self.passable(nx, ny):
+                continue
+            if not self.tile_free(nx, ny, occ, agent.id):
+                continue
+            score = _manhattan((nx, ny), agent.goal) + self.step_cost(nx, ny)
+            if score < best_score:
+                best_score = score
+                best = (nx, ny)
+        if best is None or best == pos:
+            return False
+        agent.tx, agent.ty = best
+        return True
+
     def find_path(
         self,
         start: tuple[int, int],
         goal: tuple[int, int],
         agent_id: int,
     ) -> list[tuple[int, int]]:
+        goal = self.resolve_goal(goal)
         if start == goal:
             return []
         occ = self.occupancy(except_id=agent_id)
@@ -248,14 +309,21 @@ class CrowdSimEngine:
         cost_so_far: dict[tuple[int, int], int] = {start: 0}
         heap: list[tuple[int, int, int]] = [(0, start[0], start[1])]
         explored = 0
+        closest = start
+        closest_dist = _manhattan(start, goal)
 
         while heap:
             if explored >= MAX_PATHFIND_EXPLORE:
-                return []
+                break
             _, cx, cy = heapq.heappop(heap)
             current = (cx, cy)
             explored += 1
+            dist = _manhattan(current, goal)
+            if dist < closest_dist:
+                closest_dist = dist
+                closest = current
             if current == goal:
+                closest = goal
                 break
             base_cost = cost_so_far[current]
             for dx, dy in DIRS:
@@ -274,10 +342,11 @@ class CrowdSimEngine:
                 heapq.heappush(heap, (priority, nx, ny))
                 came_from[nxt] = current
 
-        if goal not in came_from:
+        target = goal if goal in came_from else closest
+        if target == start:
             return []
         path: list[tuple[int, int]] = []
-        cur: tuple[int, int] | None = goal
+        cur: tuple[int, int] | None = target
         while cur is not None and cur != start:
             path.append(cur)
             cur = came_from.get(cur)
@@ -349,7 +418,9 @@ class CrowdSimEngine:
         goal = None
         if gate:
             gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
-            goal = self.queue_goal_tile(gate_id, gx, gy)
+            goal = self.resolve_goal(self.queue_goal_tile(gate_id, gx, gy))
+        elif zone:
+            goal = self._fallback_zone_goal(zone["id"], tx, ty)
 
         agent = SimAgent(
             id=self.next_agent_id,
@@ -386,6 +457,13 @@ class CrowdSimEngine:
         lowest = [c for c in candidates if c[0] == low]
         pick = lowest[agent_id % len(lowest)]
         return pick[1], pick[2]
+
+    def _fallback_zone_goal(self, zone_id: str, from_tx: int, from_ty: int) -> tuple[int, int] | None:
+        tiles = self._area_tiles_by_zone.get(zone_id) or []
+        if not tiles:
+            return None
+        best = min(tiles, key=lambda t: _manhattan((from_tx, from_ty), t))
+        return self.resolve_goal(best)
 
     def near_queue(self, agent: SimAgent) -> bool:
         if not agent.target_gate_id:
@@ -465,7 +543,12 @@ class CrowdSimEngine:
                 if self.near_queue(agent) and agent.target_gate_id:
                     agent.state = AgentState.QUEUING
                     agent.route = []
-            return
+                return
+
+        if agent.goal and (agent.tx, agent.ty) != agent.goal:
+            if self.greedy_step_toward(agent, occ):
+                agent.route = []
+                return
 
         if agent.target_gate_id and self.near_queue(agent):
             agent.state = AgentState.QUEUING
@@ -480,17 +563,14 @@ class CrowdSimEngine:
                 self.spawn_cooldown = self.spawn_interval
 
         occ = self.occupancy()
-        pathfind_jobs = 0
         for agent in self.agents:
             if (
                 agent.state == AgentState.WALKING
                 and agent.goal
                 and not agent.route
                 and (agent.tx, agent.ty) != agent.goal
-                and pathfind_jobs < MAX_PATHFIND_JOBS_PER_TICK
             ):
                 agent.route = self.find_path((agent.tx, agent.ty), agent.goal, agent.id)
-                pathfind_jobs += 1
             self.try_move(agent, occ)
             occ = self.occupancy()
 

@@ -98,6 +98,7 @@
     if (!el) return;
     const s = simStats || {};
     let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • idle ${s.idle || 0} • on map ${simAgents.length}`;
+    if (simPlaying) text += " • ▶ playing";
     if (simWarnings.length) {
       text += " • ⚠ " + simWarnings.join(" ");
     }
@@ -124,6 +125,9 @@
         }),
       });
       applySimState(data);
+      if ((data.stats?.spawned || 0) > 0 || (data.spawn_remaining || 0) > 0) {
+        simStart();
+      }
       if ((data.stats?.spawned || 0) === 0 && (data.warnings || []).length) {
         setStatus("Sim reset: " + data.warnings.join(" "));
       } else {
