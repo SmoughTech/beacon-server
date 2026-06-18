@@ -45,8 +45,18 @@ def test_closed_barrier_blocks_closing_segment():
     gx, gy = grid_from_norm(0.5, 0.2)
     assert grid[gy][gx] == 1
 
+def test_tile_barrier_blocks_cells():
+    barriers = [
+        {
+            "id": "b1",
+            "tiles": [[100, 50], [101, 50], [102, 50]],
+        }
+    ]
+    grid = rasterize_walls(barriers, [])
+    assert grid[50][100] == 1
+    assert grid[50][101] == 1
+    assert grid[50][102] == 1
 
-def test_scanner_on_barrier_creates_walkable_gap():
     barriers = [
         {
             "id": "b1",

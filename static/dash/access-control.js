@@ -40,7 +40,10 @@
   let accessQueues = [];
   let accessTool = "select";
   let draftBarrierPoints = [];
+  let draftBarrierTiles = new Set();
   let draftBarrierClosed = false;
+  let barrierDragState = null;
+  let barrierDragPreviewTiles = new Set();
   let draftQueuePoints = [];
   let selectedBarrierId = null;
   let selectedZoneId = null;
@@ -265,6 +268,121 @@
     const queueSection = document.getElementById("accessQueueSection");
     if (queueSection) queueSection.classList.toggle("hidden", accessTool !== "drawQueue");
     updateWorkLocationSectionVisibility();
+  }
+
+  function tileKey(tx, ty) {
+    return `${tx},${ty}`;
+  }
+
+  function parseTileKey(key) {
+    const [tx, ty] = key.split(",").map(Number);
+    return { tx, ty };
+  }
+
+  function tileLineBetween(tx0, ty0, tx1, ty1) {
+    return vertexLineBetween(tx0, ty0, tx1, ty1);
+  }
+
+  function addTilesAlongLine(tx0, ty0, tx1, ty1, targetSet) {
+    tileLineBetween(tx0, ty0, tx1, ty1).forEach(([tx, ty]) => {
+      if (tx >= 0 && tx < TILE_COLS && ty >= 0 && ty < TILE_ROWS) {
+        targetSet.add(tileKey(tx, ty));
+      }
+    });
+  }
+
+  function allDraftBarrierTileKeys() {
+    const out = new Set(draftBarrierTiles);
+    barrierDragPreviewTiles.forEach((k) => out.add(k));
+    return out;
+  }
+
+  function drawBarrierTileRects(svg, tileKeys, stroke, fill, selected) {
+    const stepX = SVG_W / TILE_COLS;
+    const stepY = SVG_H / TILE_ROWS;
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.style.pointerEvents = "none";
+    tileKeys.forEach((key) => {
+      const { tx, ty } = parseTileKey(key);
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", String(tx * stepX));
+      rect.setAttribute("y", String(ty * stepY));
+      rect.setAttribute("width", String(stepX));
+      rect.setAttribute("height", String(stepY));
+      rect.setAttribute("fill", fill);
+      rect.setAttribute("stroke", stroke);
+      rect.setAttribute("stroke-width", selected ? "1.5" : "1");
+      rect.setAttribute("opacity", "0.85");
+      g.appendChild(rect);
+    });
+    svg.appendChild(g);
+  }
+
+  function iterTileBarrierSegments(barrier) {
+    const tileSet = new Set();
+    (barrier.tiles || []).forEach(([tx, ty]) => tileSet.add(tileKey(tx, ty)));
+    const edges = [];
+    tileSet.forEach((key) => {
+      const { tx, ty } = parseTileKey(key);
+      if (!tileSet.has(tileKey(tx, ty - 1))) {
+        edges.push({
+          a: normFromVertex(tx, ty),
+          b: normFromVertex(tx + 1, ty),
+        });
+      }
+      if (!tileSet.has(tileKey(tx + 1, ty))) {
+        edges.push({
+          a: normFromVertex(tx + 1, ty),
+          b: normFromVertex(tx + 1, ty + 1),
+        });
+      }
+      if (!tileSet.has(tileKey(tx, ty + 1))) {
+        edges.push({
+          a: normFromVertex(tx + 1, ty + 1),
+          b: normFromVertex(tx, ty + 1),
+        });
+      }
+      if (!tileSet.has(tileKey(tx - 1, ty))) {
+        edges.push({
+          a: normFromVertex(tx, ty + 1),
+          b: normFromVertex(tx, ty),
+        });
+      }
+    });
+    return edges.map((edge, segIndex) => ({ segIndex, ...edge }));
+  }
+
+  function beginBarrierDrag(p) {
+    const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
+    barrierDragState = { startTx: tx, startTy: ty };
+    barrierDragPreviewTiles = new Set();
+    addTilesAlongLine(tx, ty, tx, ty, barrierDragPreviewTiles);
+    drawAccessLayers();
+  }
+
+  function updateBarrierDrag(p) {
+    if (!barrierDragState) return;
+    const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
+    barrierDragPreviewTiles = new Set();
+    addTilesAlongLine(barrierDragState.startTx, barrierDragState.startTy, tx, ty, barrierDragPreviewTiles);
+    drawAccessLayers();
+  }
+
+  function endBarrierDrag() {
+    if (!barrierDragState) return;
+    barrierDragPreviewTiles.forEach((k) => draftBarrierTiles.add(k));
+    const count = draftBarrierTiles.size;
+    barrierDragState = null;
+    barrierDragPreviewTiles = new Set();
+    drawAccessLayers();
+    setStatus(`${count} tile${count === 1 ? "" : "s"} painted. Drag again or click Finish Barrier.`);
+  }
+
+  function tilesToPayloadList(tileSet) {
+    return Array.from(tileSet).map((key) => {
+      const { tx, ty } = parseTileKey(key);
+      return [tx, ty];
+    });
   }
 
   function snapQueuePoint(p) {
@@ -659,6 +777,9 @@
   }
 
   function iterBarrierSegments(barrier) {
+    if (barrier?.tiles?.length) {
+      return iterTileBarrierSegments(barrier);
+    }
     const pts = barrier?.points || [];
     if (pts.length < 2) return [];
     const closed = !!barrier.closed;
@@ -952,6 +1073,10 @@
     const attachments = collectGateAttachments(gates);
 
     accessBarriers.forEach((barrier) => {
+      if (barrier.tiles?.length) {
+        barrier.tiles.forEach(([tx, ty]) => mark(tx, ty));
+        return;
+      }
       iterBarrierSegments(barrier).forEach(({ segIndex, a, b }) => {
         const key = `${barrier.id}:${segIndex}`;
         const segGates = attachments.get(key) || [];
@@ -1132,6 +1257,37 @@
 
     accessBarriers.forEach((barrier) => {
       if (!accessLayers.barriers) return;
+      if (barrier.tiles?.length) {
+        const keys = barrier.tiles.map(([tx, ty]) => tileKey(tx, ty));
+        const wrap = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        wrap.style.pointerEvents = "auto";
+        wrap.onclick = (ev) => {
+          ev.stopPropagation();
+          selectBarrier(barrier.id);
+        };
+        const stepX = SVG_W / TILE_COLS;
+        const stepY = SVG_H / TILE_ROWS;
+        keys.forEach((key) => {
+          const { tx, ty } = parseTileKey(key);
+          const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          rect.setAttribute("x", String(tx * stepX));
+          rect.setAttribute("y", String(ty * stepY));
+          rect.setAttribute("width", String(stepX));
+          rect.setAttribute("height", String(stepY));
+          rect.setAttribute(
+            "fill",
+            selectedBarrierId === barrier.id ? "rgba(109,247,167,0.55)" : "rgba(255,138,101,0.72)"
+          );
+          rect.setAttribute(
+            "stroke",
+            selectedBarrierId === barrier.id ? "#6df7a7" : "#ff8a65"
+          );
+          rect.setAttribute("stroke-width", selectedBarrierId === barrier.id ? "1.5" : "1");
+          wrap.appendChild(rect);
+        });
+        svg.appendChild(wrap);
+        return;
+      }
       const pts = barrier.points || [];
       if (pts.length < 2) return;
       const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
@@ -1204,6 +1360,16 @@
       draft.setAttribute("stroke-dasharray", "6 4");
       draft.style.pointerEvents = "none";
       svg.appendChild(draft);
+    }
+
+    if ((draftBarrierTiles.size || barrierDragPreviewTiles.size) && (accessLayers.barriers || accessTool === "drawBarrier")) {
+      drawBarrierTileRects(
+        svg,
+        allDraftBarrierTileKeys(),
+        "#ffd166",
+        "rgba(255,209,102,0.55)",
+        true
+      );
     }
 
     if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
@@ -1567,14 +1733,17 @@
   function setAccessTool(tool) {
     accessTool = tool;
     draftBarrierPoints = [];
+    draftBarrierTiles = new Set();
     draftBarrierClosed = false;
+    barrierDragState = null;
+    barrierDragPreviewTiles = new Set();
     draftQueuePoints = [];
     document.querySelectorAll("[data-access-tool]").forEach((btn) => {
       btn.classList.toggle("primary", btn.dataset.accessTool === tool);
     });
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
-      drawBarrier: "Trace a perimeter fence/barricade. Points snap to existing corners, edges, and scanner snap dots.",
+      drawBarrier: "Drag on the map to paint barrier tiles (2ft each). Release and drag again to extend. Finish when done.",
       drawQueue:
         "Draw a queue line from the back of the line toward the scanner. Points snap to the 400×225 tile grid. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
@@ -1806,26 +1975,24 @@
     drawAccessLayers();
   };
 
-  window.closeDraftBarrier = function () {
-    if (draftBarrierPoints.length < 3) {
-      setStatus("Add at least 3 points before closing the perimeter.");
-      return;
-    }
-    draftBarrierClosed = true;
+  window.clearDraftBarrierTiles = function () {
+    draftBarrierTiles = new Set();
+    barrierDragState = null;
+    barrierDragPreviewTiles = new Set();
     drawAccessLayers();
-    setStatus("Perimeter closed. Click Finish Barrier to save.");
+    setStatus("Cleared painted tiles. Drag to paint again.");
+  };
+
+  window.closeDraftBarrier = function () {
+    clearDraftBarrierTiles();
   };
 
   window.finishDraftBarrier = async function () {
     if (!getDashEvent()) return;
-    if (draftBarrierPoints.length < 2) {
-      setStatus("Add at least 2 points before finishing a barrier.");
+    if (draftBarrierTiles.size < 1) {
+      setStatus("Paint at least one tile by dragging on the map.");
       return;
     }
-    const first = draftBarrierPoints[0];
-    const last = draftBarrierPoints[draftBarrierPoints.length - 1];
-    const nearStart = Math.hypot(first.x - last.x, first.y - last.y) < BARRIER_ENDPOINT_SNAP_RADIUS;
-    const closed = draftBarrierClosed || (draftBarrierPoints.length >= 3 && nearStart);
     const name = document.getElementById("accessBarrierName")?.value?.trim() || "Barrier";
     const barrier_type = document.getElementById("accessBarrierType")?.value || "fence";
     const created = await api(`/events/${getDashEvent().id}/access-barriers`, {
@@ -1833,22 +2000,29 @@
       body: JSON.stringify({
         name,
         barrier_type,
-        points: draftBarrierPoints,
-        closed,
+        points: [],
+        tiles: tilesToPayloadList(draftBarrierTiles),
+        closed: false,
         updated_by: "dash_access",
       }),
     });
+    draftBarrierTiles = new Set();
     draftBarrierPoints = [];
     draftBarrierClosed = false;
+    barrierDragState = null;
+    barrierDragPreviewTiles = new Set();
     accessBarriers.push(created);
     renderAccessLists();
     drawAccessLayers();
-    setStatus(`Saved barrier "${created.name}".`);
+    setStatus(`Saved tile barrier "${created.name}" (${created.tiles?.length || 0} tiles).`);
   };
 
   window.cancelDraftBarrier = function () {
     draftBarrierPoints = [];
+    draftBarrierTiles = new Set();
     draftBarrierClosed = false;
+    barrierDragState = null;
+    barrierDragPreviewTiles = new Set();
     drawAccessLayers();
     setStatus("Barrier drawing cancelled.");
   };
@@ -2127,8 +2301,6 @@
     if (typeof currentTab === "undefined" || currentTab !== "access") return false;
 
     if (accessTool === "drawBarrier") {
-      const snapped = snapBarrierPoint(p, getDashGates());
-      addDraftBarrierPoint({ x: snapped.x, y: snapped.y }, snapped);
       return true;
     }
 
@@ -2262,6 +2434,48 @@
     if (mapWrap && !mapWrap.dataset.accessHooked) {
       mapWrap.dataset.accessHooked = "1";
       mapWrap.addEventListener(
+        "mousedown",
+        (e) => {
+          if (typeof currentTab === "undefined" || currentTab !== "access") return;
+          if (accessTool !== "drawBarrier") return;
+          if (e.button !== 0) return;
+          const p = mapXY(e);
+          beginBarrierDrag(p);
+          e.preventDefault();
+          e.stopPropagation();
+        },
+        true
+      );
+      mapWrap.addEventListener(
+        "mousemove",
+        (e) => {
+          if (!barrierDragState) return;
+          const p = mapXY(e);
+          updateBarrierDrag(p);
+        },
+        true
+      );
+      mapWrap.addEventListener(
+        "mouseup",
+        (e) => {
+          if (!barrierDragState) return;
+          endBarrierDrag();
+          e.preventDefault();
+          e.stopPropagation();
+        },
+        true
+      );
+      mapWrap.addEventListener(
+        "mouseleave",
+        () => {
+          if (barrierDragState) endBarrierDrag();
+        },
+        true
+      );
+      document.addEventListener("mouseup", () => {
+        if (barrierDragState) endBarrierDrag();
+      });
+      mapWrap.addEventListener(
         "click",
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
@@ -2271,6 +2485,10 @@
             accessTool !== "workLocations"
           )
             return;
+          if (accessTool === "drawBarrier") {
+            e.stopImmediatePropagation();
+            return;
+          }
           const p = mapXY(e);
           handleAccessMapClick(p).then((handled) => {
             if (handled) e.stopImmediatePropagation();

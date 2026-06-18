@@ -1167,9 +1167,10 @@ DASH_HTML = r'''
           <div><label>Barrier name</label><input id="accessBarrierName" placeholder="North fence" /></div>
           <div><label>Barrier type</label><select id="accessBarrierType"><option value="fence">Fence</option><option value="barricade">Barricade</option><option value="wall">Wall</option><option value="rope">Rope</option></select></div>
         </div>
+        <p class="small" style="margin-top:8px">Drag on the map to paint 2ft tiles. Release, drag again to extend, then Finish.</p>
         <div class="row" style="margin-top:8px">
           <button class="primary" onclick="finishDraftBarrier()">Finish Barrier</button>
-          <button onclick="closeDraftBarrier()">Close Perimeter</button>
+          <button onclick="clearDraftBarrierTiles()">Clear paint</button>
           <button onclick="cancelDraftBarrier()">Cancel Draw</button>
         </div>
         <div id="accessQueueSection" class="hidden" style="margin-top:10px">
@@ -1448,7 +1449,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.12.0"></script>
+<script src="/static/dash/access-control.js?v=3.13.0"></script>
 </body>
 </html>
 '''

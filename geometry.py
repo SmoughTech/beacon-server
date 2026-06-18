@@ -88,7 +88,42 @@ def draw_grid_line(
             y0 += sy
 
 
+def iter_tile_barrier_segments(
+    barrier: dict[str, Any],
+) -> Iterator[tuple[int, dict[str, Any], dict[str, Any]]]:
+    tile_set: set[tuple[int, int]] = set()
+    for raw in barrier.get("tiles") or []:
+        if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            tile_set.add((int(raw[0]), int(raw[1])))
+
+    edges: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for tx, ty in sorted(tile_set):
+        if (tx, ty - 1) not in tile_set:
+            ax, ay = norm_from_vertex(tx, ty)
+            bx, by = norm_from_vertex(tx + 1, ty)
+            edges.append(({"x": ax, "y": ay}, {"x": bx, "y": by}))
+        if (tx + 1, ty) not in tile_set:
+            ax, ay = norm_from_vertex(tx + 1, ty)
+            bx, by = norm_from_vertex(tx + 1, ty + 1)
+            edges.append(({"x": ax, "y": ay}, {"x": bx, "y": by}))
+        if (tx, ty + 1) not in tile_set:
+            ax, ay = norm_from_vertex(tx + 1, ty + 1)
+            bx, by = norm_from_vertex(tx, ty + 1)
+            edges.append(({"x": ax, "y": ay}, {"x": bx, "y": by}))
+        if (tx - 1, ty) not in tile_set:
+            ax, ay = norm_from_vertex(tx, ty + 1)
+            bx, by = norm_from_vertex(tx, ty)
+            edges.append(({"x": ax, "y": ay}, {"x": bx, "y": by}))
+
+    for i, (a, b) in enumerate(edges):
+        yield i, a, b
+
+
 def iter_barrier_segments(barrier: dict[str, Any]) -> Iterator[tuple[int, dict[str, Any], dict[str, Any]]]:
+    tiles = barrier.get("tiles") or []
+    if tiles:
+        yield from iter_tile_barrier_segments(barrier)
+        return
     pts = barrier.get("points") or []
     if len(pts) < 2:
         return
@@ -230,6 +265,13 @@ def rasterize_walls(
 
     for barrier in barriers:
         barrier_id = str(barrier.get("id", ""))
+        tiles = barrier.get("tiles") or []
+        if tiles:
+            for raw in tiles:
+                if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+                    tx, ty = int(raw[0]), int(raw[1])
+                    mark(tx, ty)
+            continue
         for seg_idx, a, b in iter_barrier_segments(barrier):
             seg_gates = attachments.get((barrier_id, seg_idx), [])
             gaps: list[tuple[float, float]] = []

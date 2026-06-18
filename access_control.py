@@ -8,7 +8,7 @@ from typing import Any, Callable, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ZONE_CLASSES = ("ga", "vip", "staff", "backstage", "vendor")
 BARRIER_TYPES = ("fence", "barricade", "wall", "rope")
@@ -30,15 +30,25 @@ class MapPoint(BaseModel):
 class AccessBarrierCreate(BaseModel):
     name: str = Field(default="Barrier", min_length=1, max_length=120)
     barrier_type: str = Field(default="fence", max_length=40)
-    points: List[MapPoint] = Field(min_length=2)
+    points: List[MapPoint] = Field(default_factory=list)
+    tiles: List[List[int]] = Field(default_factory=list)
     closed: bool = Field(default=False)
     updated_by: Optional[str] = "dash_access"
+
+    @model_validator(mode="after")
+    def check_geometry(self) -> "AccessBarrierCreate":
+        if self.tiles and len(self.tiles) >= 1:
+            return self
+        if len(self.points) >= 2:
+            return self
+        raise ValueError("Barrier needs at least 1 painted tile or 2 polyline points")
 
 
 class AccessBarrierUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     barrier_type: Optional[str] = Field(default=None, max_length=40)
-    points: Optional[List[MapPoint]] = Field(default=None, min_length=2)
+    points: Optional[List[MapPoint]] = None
+    tiles: Optional[List[List[int]]] = None
     closed: Optional[bool] = None
     updated_by: Optional[str] = "dash_access"
 
@@ -196,6 +206,26 @@ def _points_to_json(points: List[MapPoint]) -> str:
     return json.dumps([{"x": p.x, "y": p.y} for p in points])
 
 
+def _tiles_to_json(tiles: List[List[int]]) -> str:
+    return json.dumps([[int(t[0]), int(t[1])] for t in tiles if len(t) >= 2])
+
+
+def _json_to_tiles(raw: Optional[str]) -> list[list[int]]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return []
+        out: list[list[int]] = []
+        for item in data:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                out.append([int(item[0]), int(item[1])])
+        return out
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
 def _json_to_points(raw: Optional[str]) -> list[dict[str, float]]:
     if not raw:
         return []
@@ -220,6 +250,7 @@ def barrier_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "barrier_type": row["barrier_type"],
         "points": _json_to_points(row["points_json"]),
+        "tiles": _json_to_tiles(row["tiles_json"]) if "tiles_json" in keys else [],
         "closed": bool(row["closed"]) if "closed" in keys else False,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -345,6 +376,8 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
     barrier_columns = {row["name"] for row in conn.execute("PRAGMA table_info(access_barriers)").fetchall()}
     if "closed" not in barrier_columns:
         conn.execute("ALTER TABLE access_barriers ADD COLUMN closed INTEGER NOT NULL DEFAULT 0")
+    if "tiles_json" not in barrier_columns:
+        conn.execute("ALTER TABLE access_barriers ADD COLUMN tiles_json TEXT NOT NULL DEFAULT '[]'")
 
     conn.execute(
         """
@@ -413,9 +446,9 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             conn.execute(
                 """
                 INSERT INTO access_barriers (
-                    id, event_id, name, barrier_type, points_json, closed,
+                    id, event_id, name, barrier_type, points_json, tiles_json, closed,
                     created_at, updated_at, updated_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     barrier_id,
@@ -423,6 +456,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     payload.name.strip() or "Barrier",
                     normalize_barrier_type(payload.barrier_type),
                     _points_to_json(payload.points),
+                    _tiles_to_json(payload.tiles),
                     1 if payload.closed else 0,
                     timestamp,
                     timestamp,
@@ -458,6 +492,11 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 else existing["points_json"]
             )
             keys = existing.keys()
+            tiles_json = (
+                _tiles_to_json(payload.tiles)
+                if payload.tiles is not None
+                else (existing["tiles_json"] if "tiles_json" in keys else "[]")
+            )
             closed = (
                 1 if payload.closed else 0
                 if payload.closed is not None
@@ -467,11 +506,11 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             conn.execute(
                 """
                 UPDATE access_barriers
-                SET name = ?, barrier_type = ?, points_json = ?, closed = ?,
+                SET name = ?, barrier_type = ?, points_json = ?, tiles_json = ?, closed = ?,
                     updated_at = ?, updated_by = ?
                 WHERE id = ? AND event_id = ?
                 """,
-                (name, barrier_type, points_json, closed, timestamp, payload.updated_by, barrier_id, event_id),
+                (name, barrier_type, points_json, tiles_json, closed, timestamp, payload.updated_by, barrier_id, event_id),
             )
             conn.commit()
             row = conn.execute(
