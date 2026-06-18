@@ -1,12 +1,21 @@
 """Tests for geometry navmesh rasterization."""
 
+import base64
+
 from geometry import (
     GRID_H,
     GRID_W,
+    SURFACE_AREA,
+    SURFACE_BLOCKED,
+    SURFACE_PATH,
+    SURFACE_WALKABLE,
     build_scanner_graph,
+    build_surface_grid,
+    build_surface_payload,
     grid_from_norm,
     navmesh_to_bytes,
     rasterize_walls,
+    surface_to_bytes,
 )
 
 
@@ -112,3 +121,57 @@ def test_scanner_graph():
     graph = build_scanner_graph(zones, gates)
     assert any(n["kind"] == "scanner" for n in graph["nodes"])
     assert len(graph["edges"]) >= 2
+
+
+def test_surface_grid_blocked_and_path():
+    barriers = [{"id": "b1", "tiles": [[10, 10]]}]
+    paths = [{"id": "p1", "tiles": [[20, 20], [21, 20], [22, 20]]}]
+    grid = build_surface_grid(barriers, [], [], paths)
+    assert grid[10][10] == SURFACE_BLOCKED
+    assert grid[20][20] == SURFACE_PATH
+    assert grid[20][21] == SURFACE_PATH
+    assert grid[50][50] == SURFACE_WALKABLE
+
+
+def test_surface_grid_area_from_zone():
+    zones = [
+        {
+            "id": "zone_ga",
+            "polygon": [
+                {"x": 0.45, "y": 0.45},
+                {"x": 0.55, "y": 0.45},
+                {"x": 0.55, "y": 0.55},
+                {"x": 0.45, "y": 0.55},
+            ],
+        }
+    ]
+    grid = build_surface_grid([], [], zones, [])
+    gx, gy = grid_from_norm(0.5, 0.5)
+    assert grid[gy][gx] == SURFACE_AREA
+
+
+def test_surface_path_overrides_area():
+    zones = [
+        {
+            "id": "zone_ga",
+            "polygon": [
+                {"x": 0.45, "y": 0.45},
+                {"x": 0.55, "y": 0.45},
+                {"x": 0.55, "y": 0.55},
+                {"x": 0.45, "y": 0.55},
+            ],
+        }
+    ]
+    gx, gy = grid_from_norm(0.5, 0.5)
+    paths = [{"id": "p1", "tiles": [[gx, gy]]}]
+    grid = build_surface_grid([], [], zones, paths)
+    assert grid[gy][gx] == SURFACE_PATH
+
+
+def test_surface_payload_encoding():
+    grid = build_surface_grid([], [], [], [])
+    payload = build_surface_payload(grid)
+    raw = base64.b64decode(payload["data"])
+    assert len(raw) == GRID_W * GRID_H
+    assert payload["values"]["path"] == SURFACE_PATH
+    assert surface_to_bytes(grid) == raw

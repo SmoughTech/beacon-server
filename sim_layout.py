@@ -7,8 +7,8 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 
-from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, queue_row_to_dict, sim_location_row_to_dict, zone_row_to_dict
-from geometry import build_scanner_graph, navmesh_to_bytes, rasterize_walls
+from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, path_row_to_dict, queue_row_to_dict, sim_location_row_to_dict, zone_row_to_dict
+from geometry import build_scanner_graph, build_surface_grid, build_surface_payload, navmesh_to_bytes, rasterize_walls
 from tile_grid import TILE_COLS, TILE_ROWS, build_coordinate_system
 
 
@@ -83,6 +83,14 @@ def register_sim_layout(
                 """,
                 (event_id,),
             ).fetchall()
+            path_rows = conn.execute(
+                """
+                SELECT * FROM access_paths
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
 
         barriers = [barrier_row_to_dict(row) for row in barrier_rows]
         zones = [zone_row_to_dict(row) for row in zone_rows]
@@ -90,9 +98,11 @@ def register_sim_layout(
         anchors = [calibration_anchor_row_to_dict(row) for row in anchor_rows]
         sim_locations = [sim_location_row_to_dict(row) for row in sim_location_rows]
         queue_polylines = [queue_row_to_dict(row) for row in queue_rows]
+        paths = [path_row_to_dict(row) for row in path_rows]
 
         grid = rasterize_walls(barriers, gates)
         navmesh_raw = navmesh_to_bytes(grid)
+        surface_grid = build_surface_grid(barriers, gates, zones, paths)
         scanner_graph = build_scanner_graph(zones, gates)
 
         return {
@@ -106,6 +116,7 @@ def register_sim_layout(
             "scanners": gates,
             "gates": gates,
             "queue_polylines": queue_polylines,
+            "paths": paths,
             "calibration_anchors": anchors,
             "sim_locations": sim_locations,
             "navmesh": {
@@ -116,6 +127,7 @@ def register_sim_layout(
                 "blocked_value": 1,
                 "data": base64.b64encode(navmesh_raw).decode("ascii"),
             },
+            "surface": build_surface_payload(surface_grid),
             "scanner_graph": scanner_graph,
             "portal_graph": scanner_graph,
             "generated_at": now_iso(),

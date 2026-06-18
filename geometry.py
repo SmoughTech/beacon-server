@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import math
 from typing import Any, Callable, Iterator
 
@@ -19,6 +20,20 @@ from tile_grid import (
 PORTAL_SNAP_DIST = 0.011
 PORTAL_VIRTUAL_WALL_EXTEND = 0.006
 PORTAL_GAP_HALF_WIDTH = 0.014
+
+SURFACE_BLOCKED = 0
+SURFACE_WALKABLE = 1
+SURFACE_PATH = 2
+SURFACE_AREA = 3
+SURFACE_QUEUE = 4
+
+SURFACE_VALUE_NAMES: dict[int, str] = {
+    SURFACE_BLOCKED: "blocked",
+    SURFACE_WALKABLE: "walkable",
+    SURFACE_PATH: "path",
+    SURFACE_AREA: "area",
+    SURFACE_QUEUE: "queue",
+}
 
 
 def heading_unit_rad(deg: float) -> tuple[float, float]:
@@ -292,6 +307,87 @@ def navmesh_to_bytes(grid: list[list[int]]) -> bytes:
         for gx in range(GRID_W):
             out[gy * GRID_W + gx] = 1 if grid[gy][gx] else 0
     return bytes(out)
+
+
+def point_in_polygon(x: float, y: float, polygon: list[dict[str, Any]]) -> bool:
+    """Ray-casting point-in-polygon for normalized map coordinates."""
+    if len(polygon) < 3:
+        return False
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi = float(polygon[i]["x"])
+        yi = float(polygon[i]["y"])
+        xj = float(polygon[j]["x"])
+        yj = float(polygon[j]["y"])
+        intersects = (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def iter_path_tiles(paths: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    tile_set: set[tuple[int, int]] = set()
+    for path in paths:
+        for raw in path.get("tiles") or []:
+            if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+                tx, ty = int(raw[0]), int(raw[1])
+                if 0 <= tx < GRID_W and 0 <= ty < GRID_H:
+                    tile_set.add((tx, ty))
+    return tile_set
+
+
+def build_surface_grid(
+    barriers: list[dict[str, Any]],
+    gates: list[dict[str, Any]],
+    zones: list[dict[str, Any]],
+    paths: list[dict[str, Any]],
+) -> list[list[int]]:
+    """Per-tile surface type: blocked, walkable, path, area (queue reserved)."""
+    wall_grid = rasterize_walls(barriers, gates)
+    grid = [[SURFACE_WALKABLE for _ in range(GRID_W)] for _ in range(GRID_H)]
+
+    for gy in range(GRID_H):
+        for gx in range(GRID_W):
+            if wall_grid[gy][gx] == 1:
+                grid[gy][gx] = SURFACE_BLOCKED
+
+    for zone in zones:
+        polygon = zone.get("polygon") or []
+        if len(polygon) < 3:
+            continue
+        for gy in range(GRID_H):
+            for gx in range(GRID_W):
+                if grid[gy][gx] != SURFACE_WALKABLE:
+                    continue
+                cx, cy = norm_from_grid(gx, gy)
+                if point_in_polygon(cx, cy, polygon):
+                    grid[gy][gx] = SURFACE_AREA
+
+    for tx, ty in iter_path_tiles(paths):
+        if grid[ty][tx] != SURFACE_BLOCKED:
+            grid[ty][tx] = SURFACE_PATH
+
+    return grid
+
+
+def surface_to_bytes(grid: list[list[int]]) -> bytes:
+    out = bytearray(GRID_W * GRID_H)
+    for gy in range(GRID_H):
+        for gx in range(GRID_W):
+            out[gy * GRID_W + gx] = grid[gy][gx]
+    return bytes(out)
+
+
+def build_surface_payload(grid: list[list[int]]) -> dict[str, Any]:
+    return {
+        "encoding": "base64",
+        "width": TILE_COLS,
+        "height": TILE_ROWS,
+        "values": {name: value for value, name in SURFACE_VALUE_NAMES.items()},
+        "data": base64.b64encode(surface_to_bytes(grid)).decode("ascii"),
+    }
 
 
 def build_scanner_graph(

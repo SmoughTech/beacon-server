@@ -83,6 +83,39 @@ class AccessQueueUpdate(BaseModel):
     updated_by: Optional[str] = "dash_access"
 
 
+PATH_WIDTH_TILES = (1, 2, 4)
+
+
+class AccessPathCreate(BaseModel):
+    name: str = Field(default="Path", min_length=1, max_length=120)
+    width_tiles: int = Field(default=1, ge=1, le=4)
+    tiles: List[List[int]] = Field(min_length=1)
+    updated_by: Optional[str] = "dash_access"
+
+    @model_validator(mode="after")
+    def check_geometry(self) -> "AccessPathCreate":
+        if self.width_tiles not in PATH_WIDTH_TILES:
+            raise ValueError("Path width must be 1, 2, or 4 tiles")
+        if not self.tiles:
+            raise ValueError("Path needs at least 1 painted tile")
+        return self
+
+
+class AccessPathUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    width_tiles: Optional[int] = Field(default=None, ge=1, le=4)
+    tiles: Optional[List[List[int]]] = None
+    updated_by: Optional[str] = "dash_access"
+
+    @model_validator(mode="after")
+    def check_geometry(self) -> "AccessPathUpdate":
+        if self.width_tiles is not None and self.width_tiles not in PATH_WIDTH_TILES:
+            raise ValueError("Path width must be 1, 2, or 4 tiles")
+        if self.tiles is not None and not self.tiles:
+            raise ValueError("Path needs at least 1 painted tile")
+        return self
+
+
 class ScannerAccessUpdate(BaseModel):
     zone_a_id: Optional[str] = Field(default=None, max_length=80)
     zone_b_id: Optional[str] = Field(default=None, max_length=80)
@@ -273,6 +306,13 @@ def zone_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def normalize_path_width(value: Optional[int]) -> int:
+    raw = int(value or 1)
+    if raw not in PATH_WIDTH_TILES:
+        raw = 1
+    return raw
+
+
 def queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -280,6 +320,21 @@ def queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "gate_id": row["gate_id"],
         "points": _json_to_points(row["points_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def path_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    width_tiles = normalize_path_width(row["width_tiles"] if "width_tiles" in row.keys() else 1)
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "width_tiles": width_tiles,
+        "widthTiles": width_tiles,
+        "tiles": _json_to_tiles(row["tiles_json"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
@@ -418,6 +473,26 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_access_queue_polylines_event_id
         ON access_queue_polylines(event_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_paths (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            width_tiles INTEGER NOT NULL DEFAULT 1,
+            tiles_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_access_paths_event_id
+        ON access_paths(event_id)
         """
     )
 
@@ -946,6 +1021,97 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.commit()
         return {"deleted": True, "id": queue_id}
+
+    @router.get("/events/{event_id}/access-paths")
+    def list_paths(event_id: str):
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM access_paths
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
+        return [path_row_to_dict(row) for row in rows]
+
+    @router.post("/events/{event_id}/access-paths")
+    def create_path(event_id: str, payload: AccessPathCreate):
+        path_id = "path_" + uuid4().hex[:12]
+        timestamp = now_iso()
+        width_tiles = normalize_path_width(payload.width_tiles)
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO access_paths (
+                    id, event_id, name, width_tiles, tiles_json,
+                    created_at, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path_id,
+                    event_id,
+                    payload.name.strip() or "Path",
+                    width_tiles,
+                    _tiles_to_json(payload.tiles),
+                    timestamp,
+                    timestamp,
+                    payload.updated_by,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_paths WHERE id = ? AND event_id = ?",
+                (path_id, event_id),
+            ).fetchone()
+        return path_row_to_dict(row)
+
+    @router.put("/events/{event_id}/access-paths/{path_id}")
+    def update_path(event_id: str, path_id: str, payload: AccessPathUpdate):
+        with get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM access_paths WHERE id = ? AND event_id = ?",
+                (path_id, event_id),
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Path not found")
+
+            name = payload.name.strip() if payload.name is not None else existing["name"]
+            width_tiles = (
+                normalize_path_width(payload.width_tiles)
+                if payload.width_tiles is not None
+                else normalize_path_width(existing["width_tiles"])
+            )
+            tiles_json = (
+                _tiles_to_json(payload.tiles)
+                if payload.tiles is not None
+                else existing["tiles_json"]
+            )
+            timestamp = now_iso()
+            conn.execute(
+                """
+                UPDATE access_paths
+                SET name = ?, width_tiles = ?, tiles_json = ?, updated_at = ?, updated_by = ?
+                WHERE id = ? AND event_id = ?
+                """,
+                (name, width_tiles, tiles_json, timestamp, payload.updated_by, path_id, event_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_paths WHERE id = ? AND event_id = ?",
+                (path_id, event_id),
+            ).fetchone()
+        return path_row_to_dict(row)
+
+    @router.delete("/events/{event_id}/access-paths/{path_id}")
+    def delete_path(event_id: str, path_id: str):
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM access_paths WHERE id = ? AND event_id = ?",
+                (path_id, event_id),
+            )
+            conn.commit()
+        return {"deleted": True, "id": path_id}
 
     app.include_router(router)
 
