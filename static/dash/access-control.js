@@ -2434,11 +2434,22 @@
     if (mapWrap && !mapWrap.dataset.accessHooked) {
       mapWrap.dataset.accessHooked = "1";
       mapWrap.addEventListener(
+        "dragstart",
+        (e) => {
+          e.preventDefault();
+        },
+        true
+      );
+      mapWrap.addEventListener(
         "mousedown",
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
-          if (accessTool !== "drawBarrier") return;
           if (e.button !== 0) return;
+          if (accessTool === "drawQueue" || accessTool === "fillZone" || accessTool === "workLocations") {
+            e.preventDefault();
+            return;
+          }
+          if (accessTool !== "drawBarrier") return;
           const p = mapXY(e);
           beginBarrierDrag(p);
           e.preventDefault();
@@ -2481,6 +2492,7 @@
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (
             accessTool !== "drawBarrier" &&
+            accessTool !== "drawQueue" &&
             accessTool !== "fillZone" &&
             accessTool !== "workLocations"
           )
