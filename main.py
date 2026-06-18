@@ -1514,7 +1514,7 @@ async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))retur
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
 <script src="/static/dash/access-control.js?v=3.14.0"></script>
-<script src="/static/dash/crowd-sim.js?v=1.1.0"></script>
+<script src="/static/dash/crowd-sim.js?v=1.1.1"></script>
 </body>
 </html>
 '''

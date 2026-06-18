@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+import heapq
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -23,8 +23,10 @@ from tile_grid import TILE_COLS, TILE_ROWS, grid_from_norm, norm_from_grid, tile
 SIM_TICK_HZ = 30
 SCAN_TIME_TICKS = 45  # 1.5 s
 OFF_PATH_STEP_COST = 10
+MAX_PATHFIND_EXPLORE = 8_000
+MAX_PATHFIND_JOBS_PER_TICK = 4
+MAX_AREA_CANDIDATES = 2_000
 DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
-
 
 class AgentState(str, Enum):
     WALKING = "walking"
@@ -55,7 +57,7 @@ class SimResetRequest(BaseModel):
 
 
 class SimTickRequest(BaseModel):
-    steps: int = Field(default=1, ge=1, le=120)
+    steps: int = Field(default=1, ge=1, le=30)
 
 
 def _bresenham_tiles(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
@@ -146,6 +148,7 @@ class CrowdSimEngine:
         self.warnings: list[str] = []
 
         self._spawn_tiles = self._collect_spawn_tiles()
+        self._area_tiles_by_zone = self._index_area_tiles()
 
     def _collect_spawn_tiles(self) -> list[tuple[int, int]]:
         tiles: list[tuple[int, int]] = []
@@ -157,6 +160,35 @@ class CrowdSimEngine:
                     continue
                 tiles.append((tx, ty))
         return tiles or [(0, TILE_ROWS - 1)]
+
+    def _index_area_tiles(self) -> dict[str, list[tuple[int, int]]]:
+        indexed: dict[str, list[tuple[int, int]]] = {}
+        for zone in self.zones:
+            zone_id = zone["id"]
+            polygon = zone.get("polygon") or []
+            if len(polygon) < 3:
+                indexed[zone_id] = []
+                continue
+            min_tx, max_tx = TILE_COLS - 1, 0
+            min_ty, max_ty = TILE_ROWS - 1, 0
+            for p in polygon:
+                tx, ty = tile_from_norm(float(p["x"]), float(p["y"]))
+                min_tx = min(min_tx, tx)
+                max_tx = max(max_tx, tx)
+                min_ty = min(min_ty, ty)
+                max_ty = max(max_ty, ty)
+            tiles: list[tuple[int, int]] = []
+            for ty in range(max(0, min_ty), min(TILE_ROWS, max_ty + 1)):
+                for tx in range(max(0, min_tx), min(TILE_COLS, max_tx + 1)):
+                    if self.surface[ty][tx] != SURFACE_AREA:
+                        continue
+                    if not self.passable(tx, ty):
+                        continue
+                    cx, cy = norm_from_grid(tx, ty)
+                    if point_in_polygon(cx, cy, polygon):
+                        tiles.append((tx, ty))
+            indexed[zone_id] = tiles
+        return indexed
 
     def configure_spawns(self, ga_count: int, vip_count: int, spawn_interval: int) -> None:
         self.spawn_interval = spawn_interval
@@ -212,16 +244,20 @@ class CrowdSimEngine:
         if start == goal:
             return []
         occ = self.occupancy(except_id=agent_id)
-        frontier: list[tuple[int, tuple[int, int]]] = [(0, start)]
         came_from: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
         cost_so_far: dict[tuple[int, int], int] = {start: 0}
+        heap: list[tuple[int, int, int]] = [(0, start[0], start[1])]
+        explored = 0
 
-        while frontier:
-            frontier.sort(key=lambda item: item[0])
-            _, current = frontier.pop(0)
+        while heap:
+            if explored >= MAX_PATHFIND_EXPLORE:
+                return []
+            _, cx, cy = heapq.heappop(heap)
+            current = (cx, cy)
+            explored += 1
             if current == goal:
                 break
-            cx, cy = current
+            base_cost = cost_so_far[current]
             for dx, dy in DIRS:
                 nx, ny = cx + dx, cy + dy
                 nxt = (nx, ny)
@@ -229,12 +265,14 @@ class CrowdSimEngine:
                     continue
                 if not self.tile_free(nx, ny, occ, agent_id) and nxt != goal:
                     continue
-                new_cost = cost_so_far[current] + self.step_cost(nx, ny)
-                if nxt not in cost_so_far or new_cost < cost_so_far[nxt]:
-                    cost_so_far[nxt] = new_cost
-                    priority = new_cost + _manhattan(nxt, goal)
-                    frontier.append((priority, nxt))
-                    came_from[nxt] = current
+                new_cost = base_cost + self.step_cost(nx, ny)
+                old = cost_so_far.get(nxt)
+                if old is not None and new_cost >= old:
+                    continue
+                cost_so_far[nxt] = new_cost
+                priority = new_cost + _manhattan(nxt, goal)
+                heapq.heappush(heap, (priority, nx, ny))
+                came_from[nxt] = current
 
         if goal not in came_from:
             return []
@@ -322,32 +360,25 @@ class CrowdSimEngine:
             target_gate_id=gate_id,
             goal=goal,
         )
-        if goal:
-            agent.route = self.find_path((tx, ty), goal, agent.id)
+        # Route is computed lazily on first tick — keeps /sim/reset fast.
         self.agents.append(agent)
         self.next_agent_id += 1
         self.stats["spawned"] += 1
         return True
 
     def pick_area_tile(self, zone_id: str, agent_id: int) -> tuple[int, int] | None:
-        zone = self.zones_by_id.get(zone_id)
-        if not zone:
+        tiles = self._area_tiles_by_zone.get(zone_id) or []
+        if not tiles:
             return None
         occ = self.occupancy(except_id=agent_id)
         candidates: list[tuple[int, int, int]] = []
-        for ty in range(TILE_ROWS):
-            for tx in range(TILE_COLS):
-                if self.surface[ty][tx] != SURFACE_AREA:
-                    continue
-                if not self.passable(tx, ty):
-                    continue
-                cx, cy = norm_from_grid(tx, ty)
-                if not point_in_polygon(cx, cy, zone.get("polygon") or []):
-                    continue
-                if not self.tile_free(tx, ty, occ, agent_id):
-                    continue
-                density = 1 if (tx, ty) in occ else 0
-                candidates.append((density, tx, ty))
+        for tx, ty in tiles:
+            if not self.tile_free(tx, ty, occ, agent_id):
+                continue
+            density = 1 if (tx, ty) in occ else 0
+            candidates.append((density, tx, ty))
+            if len(candidates) >= MAX_AREA_CANDIDATES:
+                break
         if not candidates:
             return None
         candidates.sort(key=lambda item: (item[0], item[1], item[2]))
@@ -426,9 +457,6 @@ class CrowdSimEngine:
                 agent.route = []
                 return
 
-        if not agent.route and agent.goal:
-            agent.route = self.find_path((agent.tx, agent.ty), agent.goal, agent.id)
-
         if agent.route:
             nxt = agent.route[0]
             if self.tile_free(nxt[0], nxt[1], occ, agent.id):
@@ -452,10 +480,17 @@ class CrowdSimEngine:
                 self.spawn_cooldown = self.spawn_interval
 
         occ = self.occupancy()
+        pathfind_jobs = 0
         for agent in self.agents:
-            if agent.state == AgentState.WALKING and agent.target_gate_id and agent.goal:
-                if not agent.route and (agent.tx, agent.ty) != agent.goal:
-                    agent.route = self.find_path((agent.tx, agent.ty), agent.goal, agent.id)
+            if (
+                agent.state == AgentState.WALKING
+                and agent.goal
+                and not agent.route
+                and (agent.tx, agent.ty) != agent.goal
+                and pathfind_jobs < MAX_PATHFIND_JOBS_PER_TICK
+            ):
+                agent.route = self.find_path((agent.tx, agent.ty), agent.goal, agent.id)
+                pathfind_jobs += 1
             self.try_move(agent, occ)
             occ = self.occupancy()
 
