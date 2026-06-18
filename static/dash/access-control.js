@@ -1,13 +1,19 @@
 (function () {
   const SVG_W = 1000;
   const SVG_H = 562.5;
-  const GRID_W = 400;
-  const GRID_H = 225;
+  const TILE_SIZE_FT = 2;
+  const TILE_COLS = 400;
+  const TILE_ROWS = 225;
+  const VERTEX_COLS = TILE_COLS + 1;
+  const VERTEX_ROWS = TILE_ROWS + 1;
+  const GRID_W = TILE_COLS;
+  const GRID_H = TILE_ROWS;
   const PORTAL_SNAP_DIST = 0.011;
   const PORTAL_SNAP_RADIUS = 0.014;
   const BARRIER_ENDPOINT_SNAP_RADIUS = 0.02;
   const BARRIER_SEGMENT_SNAP_RADIUS = 0.018;
   const SCANNER_FENCE_SNAP_RADIUS = 0.045;
+  const PLACEMENT_SNAP_RADIUS = 0.018;
   const PORTAL_GAP_HALF_WIDTH = 0.014;
 
   const ZONE_COLORS = {
@@ -262,37 +268,141 @@
   }
 
   function snapQueuePoint(p) {
-    const { gx, gy } = gridFromNorm(p.x, p.y);
-    return normFromGrid(gx, gy);
+    const { vx, vy } = vertexFromNorm(p.x, p.y);
+    return normFromVertex(vx, vy);
+  }
+
+  function vertexFromNorm(x, y) {
+    return {
+      vx: Math.max(0, Math.min(VERTEX_COLS - 1, Math.round(x * TILE_COLS))),
+      vy: Math.max(0, Math.min(VERTEX_ROWS - 1, Math.round(y * TILE_ROWS))),
+    };
+  }
+
+  function normFromVertex(vx, vy) {
+    return { x: vx / TILE_COLS, y: vy / TILE_ROWS };
+  }
+
+  function vertexLineBetween(ax, ay, bx, by) {
+    const points = [];
+    let x0 = ax;
+    let y0 = ay;
+    const x1 = bx;
+    const y1 = by;
+    let dx = Math.abs(x1 - x0);
+    let dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    while (true) {
+      points.push([x0, y0]);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) {
+        err -= dy;
+        x0 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+    return points;
+  }
+
+  function appendQueueVertexPoint(p) {
+    const snapped = snapQueuePoint(p);
+    if (!draftQueuePoints.length) {
+      draftQueuePoints.push(snapped);
+      return;
+    }
+    const prev = draftQueuePoints[draftQueuePoints.length - 1];
+    const a = vertexFromNorm(prev.x, prev.y);
+    const b = vertexFromNorm(snapped.x, snapped.y);
+    const steps = vertexLineBetween(a.vx, a.vy, b.vx, b.vy);
+    steps.slice(1).forEach(([vx, vy]) => {
+      draftQueuePoints.push(normFromVertex(vx, vy));
+    });
+  }
+
+  function snapPlacementAnchor(x, y, radiusNorm = PLACEMENT_SNAP_RADIUS) {
+    const vtx = vertexFromNorm(x, y);
+    const vx = vtx.vx;
+    const vy = vtx.vy;
+    let best = { x: vx / TILE_COLS, y: vy / TILE_ROWS, snapKind: "vertex", vx, vy };
+    let bestDist = Math.hypot(x - best.x, y - best.y);
+
+    const consider = (px, py, meta) => {
+      const d = Math.hypot(x - px, y - py);
+      if (d <= radiusNorm && d < bestDist) {
+        bestDist = d;
+        best = { x: px, y: py, ...meta };
+      }
+    };
+
+    const tx = Math.max(0, Math.min(TILE_COLS - 1, Math.floor(x * TILE_COLS)));
+    const ty = Math.max(0, Math.min(TILE_ROWS - 1, Math.floor(y * TILE_ROWS)));
+    consider((tx + 0.5) / TILE_COLS, ty / TILE_ROWS, { snapKind: "h_edge", tx, vy: ty });
+    consider((tx + 0.5) / TILE_COLS, (ty + 1) / TILE_ROWS, { snapKind: "h_edge", tx, vy: ty + 1 });
+    consider(tx / TILE_COLS, (ty + 0.5) / TILE_ROWS, { snapKind: "v_edge", vx: tx, ty });
+    consider((tx + 1) / TILE_COLS, (ty + 0.5) / TILE_ROWS, { snapKind: "v_edge", vx: tx + 1, ty });
+
+    for (let ox = 0; ox <= 1; ox += 1) {
+      for (let oy = 0; oy <= 1; oy += 1) {
+        const cvx = Math.max(0, Math.min(VERTEX_COLS - 1, tx + ox));
+        const cvy = Math.max(0, Math.min(VERTEX_ROWS - 1, ty + oy));
+        consider(cvx / TILE_COLS, cvy / TILE_ROWS, { snapKind: "vertex", vx: cvx, vy: cvy });
+      }
+    }
+
+    return best;
   }
 
   function drawTileGrid(svg) {
     if (!accessLayers.tileGrid) return;
-    const stepX = SVG_W / (GRID_W - 1);
-    const stepY = SVG_H / (GRID_H - 1);
+    const stepX = SVG_W / TILE_COLS;
+    const stepY = SVG_H / TILE_ROWS;
     const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
     g.setAttribute("class", "accessTileGrid");
     g.style.pointerEvents = "none";
-    for (let gx = 0; gx < GRID_W; gx += 20) {
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("x1", String(gx * stepX));
-      line.setAttribute("y1", "0");
-      line.setAttribute("x2", String(gx * stepX));
-      line.setAttribute("y2", String(SVG_H));
-      line.setAttribute("stroke", "rgba(255,255,255,0.08)");
-      line.setAttribute("stroke-width", "1");
-      g.appendChild(line);
+
+    let defs = svg.querySelector("defs.accessTileDefs");
+    if (!defs) {
+      defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      defs.setAttribute("class", "accessTileDefs");
+      const pattern = document.createElementNS("http://www.w3.org/2000/svg", "pattern");
+      pattern.setAttribute("id", "accessTilePattern");
+      pattern.setAttribute("patternUnits", "userSpaceOnUse");
+      pattern.setAttribute("width", String(stepX));
+      pattern.setAttribute("height", String(stepY));
+
+      const addLine = (x1, y1, x2, y2, stroke, width) => {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", String(x1));
+        line.setAttribute("y1", String(y1));
+        line.setAttribute("x2", String(x2));
+        line.setAttribute("y2", String(y2));
+        line.setAttribute("stroke", stroke);
+        line.setAttribute("stroke-width", String(width));
+        pattern.appendChild(line);
+      };
+
+      addLine(0, stepY, stepX, stepY, "rgba(255,255,255,0.14)", 1);
+      addLine(stepX, 0, stepX, stepY, "rgba(255,255,255,0.14)", 1);
+      addLine(0, 0, stepX, stepY, "rgba(0,229,255,0.07)", 0.75);
+      addLine(stepX, 0, 0, stepY, "rgba(0,229,255,0.07)", 0.75);
+
+      defs.appendChild(pattern);
+      svg.insertBefore(defs, svg.firstChild);
     }
-    for (let gy = 0; gy < GRID_H; gy += 20) {
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("x1", "0");
-      line.setAttribute("y1", String(gy * stepY));
-      line.setAttribute("x2", String(SVG_W));
-      line.setAttribute("y2", String(gy * stepY));
-      line.setAttribute("stroke", "rgba(255,255,255,0.08)");
-      line.setAttribute("stroke-width", "1");
-      g.appendChild(line);
-    }
+
+    const fill = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    fill.setAttribute("x", "0");
+    fill.setAttribute("y", "0");
+    fill.setAttribute("width", String(SVG_W));
+    fill.setAttribute("height", String(SVG_H));
+    fill.setAttribute("fill", "url(#accessTilePattern)");
+    g.appendChild(fill);
     svg.appendChild(g);
   }
 
@@ -676,7 +786,16 @@
     if (scannerSnap.snapped) return scannerSnap;
     const barrierSnap = snapToExistingBarrier(p);
     if (barrierSnap.snapped) return barrierSnap;
-    return { x: p.x, y: p.y, snapped: false };
+    const { vx, vy } = vertexFromNorm(p.x, p.y);
+    const snapped = normFromVertex(vx, vy);
+    return {
+      x: snapped.x,
+      y: snapped.y,
+      snapped: true,
+      snapKind: "grid_vertex",
+      vx,
+      vy,
+    };
   }
 
   function drawNormSegmentWithGaps(grid, a, b, gaps, mark) {
@@ -767,13 +886,15 @@
       if (snapInfo?.snapped) {
       if (snapInfo.snapKind === "barrier_endpoint" || snapInfo.snapKind === "draft_point") {
         setStatus(`Snapped to corner (point ${draftBarrierPoints.length}).`);
+      } else if (snapInfo.snapKind === "grid_vertex") {
+        setStatus(`Snapped to grid vertex (${snapInfo.vx}, ${snapInfo.vy}) — point ${draftBarrierPoints.length}.`);
       } else if (snapInfo.snapKind === "barrier_segment") {
         setStatus(`Snapped to ${snapInfo.barrierName} edge (point ${draftBarrierPoints.length}).`);
       } else {
         setStatus(`Snapped to ${snapInfo.gateName} side ${snapInfo.side.toUpperCase()} (point ${draftBarrierPoints.length}).`);
       }
     } else {
-      setStatus(`Barrier point ${draftBarrierPoints.length}. Snap to corners/edges or click Close Perimeter when done.`);
+      setStatus(`Barrier point ${draftBarrierPoints.length}. Clicks snap to grid vertices (H/V/diagonal segments).`);
     }
   }
 
@@ -798,13 +919,13 @@
 
   function gridFromNorm(x, y) {
     return {
-      gx: Math.max(0, Math.min(GRID_W - 1, Math.round(x * (GRID_W - 1)))),
-      gy: Math.max(0, Math.min(GRID_H - 1, Math.round(y * (GRID_H - 1)))),
+      gx: Math.max(0, Math.min(TILE_COLS - 1, Math.floor(x * TILE_COLS))),
+      gy: Math.max(0, Math.min(TILE_ROWS - 1, Math.floor(y * TILE_ROWS))),
     };
   }
 
   function normFromGrid(gx, gy) {
-    return { x: gx / (GRID_W - 1), y: gy / (GRID_H - 1) };
+    return { x: (gx + 0.5) / TILE_COLS, y: (gy + 0.5) / TILE_ROWS };
   }
 
   function addPortalVirtualWall(grid, gate) {
@@ -870,7 +991,7 @@
   }
 
   function cornerToNorm(gx, gy) {
-    return { x: gx / GRID_W, y: gy / GRID_H };
+    return normFromVertex(gx, gy);
   }
 
   function cellFilled(filled, cx, cy) {
@@ -1199,14 +1320,16 @@
         barrier_name: hit.barrier_name,
       };
     }
+    const anchor = snapPlacementAnchor(x, y);
     return {
-      map_x: x,
-      map_y: y,
+      map_x: anchor.x,
+      map_y: anchor.y,
       fence_heading_deg: gate?.fence_heading_deg ?? gate?.fenceHeadingDeg ?? 0,
       barrier_id: null,
       barrier_segment_index: null,
       barrier_segment_t: null,
-      snapped: false,
+      snapped: true,
+      snap_kind: anchor.snapKind,
       barrier_name: null,
     };
   }
@@ -2015,10 +2138,9 @@
         setStatus("Place a scanner first, then draw the queue line toward it.");
         return true;
       }
-      const snapped = snapQueuePoint(p);
-      draftQueuePoints.push(snapped);
+      appendQueueVertexPoint(p);
       drawAccessLayers();
-      setStatus(`Queue point ${draftQueuePoints.length} (tile-snapped). Click Finish Queue when done.`);
+      setStatus(`Queue point ${draftQueuePoints.length} (grid vertex). Click Finish Queue when done.`);
       return true;
     }
 
@@ -2039,13 +2161,14 @@
           document.getElementById("placeSimLocType")?.value || placeSimLocationType || "staff_spot";
         placeSimLocationType = locationType;
         const meta = SIM_LOCATION_META[locationType] || SIM_LOCATION_META.staff_spot;
+        const anchor = snapPlacementAnchor(p.x, p.y);
         const created = await api(`/events/${getDashEvent().id}/sim-locations`, {
           method: "POST",
           body: JSON.stringify({
             name: meta.label,
             location_type: locationType,
-            map_x: p.x,
-            map_y: p.y,
+            map_x: anchor.x,
+            map_y: anchor.y,
             updated_by: "dash_access",
           }),
         });
@@ -2053,7 +2176,7 @@
         selectedSimLocationId = created.id;
         renderWorkLocationSection();
         if (typeof drawBase === "function") drawBase();
-        setStatus(`Placed ${meta.label} at ${p.x.toFixed(3)}, ${p.y.toFixed(3)}.`);
+        setStatus(`Placed ${meta.label} on grid (${anchor.snapKind}).`);
       } catch (err) {
         setStatus(err.message || String(err));
       }

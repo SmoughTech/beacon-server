@@ -5,21 +5,20 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Iterator
 
-GRID_W = 400
-GRID_H = 225
+from tile_grid import (
+    GRID_H,
+    GRID_W,
+    TILE_COLS,
+    TILE_ROWS,
+    grid_from_norm,
+    norm_from_grid,
+    norm_from_vertex,
+    vertex_from_norm,
+)
+
 PORTAL_SNAP_DIST = 0.011
 PORTAL_VIRTUAL_WALL_EXTEND = 0.006
 PORTAL_GAP_HALF_WIDTH = 0.014
-
-
-def grid_from_norm(x: float, y: float) -> tuple[int, int]:
-    gx = max(0, min(GRID_W - 1, round(x * (GRID_W - 1))))
-    gy = max(0, min(GRID_H - 1, round(y * (GRID_H - 1))))
-    return gx, gy
-
-
-def norm_from_grid(gx: int, gy: int) -> tuple[float, float]:
-    return gx / (GRID_W - 1), gy / (GRID_H - 1)
 
 
 def heading_unit_rad(deg: float) -> tuple[float, float]:

@@ -8,10 +8,11 @@ from typing import Any, Callable
 from fastapi import APIRouter, HTTPException
 
 from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, queue_row_to_dict, sim_location_row_to_dict, zone_row_to_dict
-from geometry import GRID_H, GRID_W, build_scanner_graph, navmesh_to_bytes, rasterize_walls
+from geometry import build_scanner_graph, navmesh_to_bytes, rasterize_walls
+from tile_grid import TILE_COLS, TILE_ROWS, build_coordinate_system
 
 
-SIM_LAYOUT_SCHEMA_VERSION = 1
+SIM_LAYOUT_SCHEMA_VERSION = 2
 
 
 def register_sim_layout(
@@ -99,17 +100,7 @@ def register_sim_layout(
             "event_id": event_id,
             "event_name": event.get("name", event_id),
             "map_url": event.get("map_url"),
-            "coordinate_system": {
-                "space": "normalized",
-                "origin": "top_left",
-                "x_range": [0.0, 1.0],
-                "y_range": [0.0, 1.0],
-                "navmesh_width": GRID_W,
-                "navmesh_height": GRID_H,
-                "tile_width": GRID_W,
-                "tile_height": GRID_H,
-                "tile_space": "grid",
-            },
+            "coordinate_system": build_coordinate_system(),
             "barriers": barriers,
             "zones": zones,
             "scanners": gates,
@@ -119,8 +110,8 @@ def register_sim_layout(
             "sim_locations": sim_locations,
             "navmesh": {
                 "encoding": "base64",
-                "width": GRID_W,
-                "height": GRID_H,
+                "width": TILE_COLS,
+                "height": TILE_ROWS,
                 "walkable_value": 0,
                 "blocked_value": 1,
                 "data": base64.b64encode(navmesh_raw).decode("ascii"),
