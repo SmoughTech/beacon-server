@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import heapq
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -26,6 +27,8 @@ OFF_PATH_STEP_COST = 10
 MAX_PATHFIND_EXPLORE = 8_000
 MAX_PATHFIND_JOBS_PER_TICK = 4
 MAX_AREA_CANDIDATES = 2_000
+MIN_SPAWN_DIST_FROM_GATE = 40
+SYNTHETIC_QUEUE_LENGTH = 16
 DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 class AgentState(str, Enum):
@@ -129,14 +132,32 @@ class CrowdSimEngine:
         self.gates = gates
         self.zones_by_id = {z["id"]: z for z in zones}
         self.queues_by_gate: dict[str, list[tuple[int, int]]] = {}
+        self._painted_queue_gates: set[str] = set()
         for q in queue_polylines:
             gid = q.get("gate_id")
             if gid:
-                self.queues_by_gate[gid] = _rasterize_queue(q.get("points") or [])
+                tiles = _rasterize_queue(q.get("points") or [])
+                if tiles:
+                    self.queues_by_gate[gid] = tiles
+                    self._painted_queue_gates.add(gid)
 
         wall = rasterize_walls(barriers, gates)
         self.blocked = [[wall[gy][gx] == 1 for gx in range(TILE_COLS)] for gy in range(TILE_ROWS)]
         self.surface = build_surface_grid(barriers, gates, zones, paths)
+
+        self.layout_warnings: list[str] = []
+        for gate in gates:
+            gid = gate["id"]
+            if self.queues_by_gate.get(gid):
+                continue
+            gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+            synthetic = self._synthetic_queue_for_gate(gx, gy)
+            if synthetic:
+                self.queues_by_gate[gid] = synthetic
+                name = gate.get("name") or gid
+                self.layout_warnings.append(
+                    f'Scanner "{name}" has no queue line — sim uses an auto queue toward the scanner.'
+                )
 
         self.agents: list[SimAgent] = []
         self.next_agent_id = 1
@@ -151,31 +172,73 @@ class CrowdSimEngine:
         self._spawn_tiles = self._collect_spawn_tiles()
         self._area_tiles_by_zone = self._index_area_tiles()
 
-    def _collect_spawn_tiles(self) -> list[tuple[int, int]]:
-        gate_tiles: list[tuple[int, int]] = []
-        seen: set[tuple[int, int]] = set()
+    def _gate_positions(self) -> list[tuple[int, int]]:
+        positions: list[tuple[int, int]] = []
         for gate in self.gates:
-            gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
-            for dx in range(-24, 25):
-                for dy in range(-24, 25):
-                    tx, ty = gx + dx, gy + dy
-                    if not self.passable(tx, ty) or self.surface[ty][tx] == SURFACE_AREA:
-                        continue
-                    if (tx, ty) in seen:
-                        continue
-                    seen.add((tx, ty))
-                    gate_tiles.append((tx, ty))
-        if gate_tiles:
-            return gate_tiles
-        tiles: list[tuple[int, int]] = []
-        for ty in range(TILE_ROWS):
-            for tx in range(TILE_COLS):
-                if self.blocked[ty][tx] or self.surface[ty][tx] == SURFACE_BLOCKED:
+            positions.append(grid_from_norm(float(gate["map_x"]), float(gate["map_y"])))
+        return positions
+
+    def _synthetic_queue_for_gate(self, gx: int, gy: int) -> list[tuple[int, int]]:
+        """Tail → head line when no queue polyline was painted."""
+        head = self.nearest_passable(gx, gy, max_radius=12)
+        if not head:
+            return []
+        visited: dict[tuple[int, int], int] = {head: 0}
+        queue: deque[tuple[tuple[int, int], int]] = deque([(head, 0)])
+        best_tail = head
+        best_score = (-1, 10**9)
+        while queue:
+            pos, dist = queue.popleft()
+            if dist > SYNTHETIC_QUEUE_LENGTH:
+                continue
+            path_bias = 0 if self.surface[pos[1]][pos[0]] == SURFACE_PATH else 1
+            score = (dist, -path_bias)
+            if score > best_score:
+                best_score = score
+                best_tail = pos
+            for dx, dy in DIRS:
+                nxt = (pos[0] + dx, pos[1] + dy)
+                if nxt in visited or not self.passable(nxt[0], nxt[1]):
                     continue
-                if self.surface[ty][tx] == SURFACE_AREA:
-                    continue
-                tiles.append((tx, ty))
-        return tiles or [(TILE_COLS // 2, TILE_ROWS - 1)]
+                visited[nxt] = dist + 1
+                queue.append((nxt, dist + 1))
+        if best_tail == head:
+            for dx, dy in DIRS:
+                nxt = (head[0] + dx, head[1] + dy)
+                if self.passable(nxt[0], nxt[1]):
+                    best_tail = nxt
+                    break
+        if best_tail == head:
+            return [head]
+        return _bresenham_tiles(best_tail[0], best_tail[1], head[0], head[1])
+
+    def _collect_spawn_tiles(self) -> list[tuple[int, int]]:
+        gate_positions = self._gate_positions()
+
+        def collect(min_dist: int) -> list[tuple[int, int]]:
+            path_tiles: list[tuple[int, int]] = []
+            walk_tiles: list[tuple[int, int]] = []
+            for ty in range(TILE_ROWS):
+                for tx in range(TILE_COLS):
+                    if self.blocked[ty][tx] or self.surface[ty][tx] == SURFACE_BLOCKED:
+                        continue
+                    if self.surface[ty][tx] == SURFACE_AREA:
+                        continue
+                    if gate_positions:
+                        nearest_gate = min(_manhattan((tx, ty), gp) for gp in gate_positions)
+                        if nearest_gate < min_dist:
+                            continue
+                    if self.surface[ty][tx] == SURFACE_PATH:
+                        path_tiles.append((tx, ty))
+                    else:
+                        walk_tiles.append((tx, ty))
+            return path_tiles or walk_tiles
+
+        for min_dist in (MIN_SPAWN_DIST_FROM_GATE, 30, 20, 0):
+            tiles = collect(min_dist)
+            if tiles:
+                return tiles
+        return [(TILE_COLS // 2, TILE_ROWS - 1)]
 
     def _index_area_tiles(self) -> dict[str, list[tuple[int, int]]]:
         indexed: dict[str, list[tuple[int, int]]] = {}
@@ -362,11 +425,13 @@ class CrowdSimEngine:
         return self.zones[0] if self.zones else None
 
     def spawn_diagnostics(self) -> list[str]:
-        warnings: list[str] = []
+        warnings = list(getattr(self, "layout_warnings", []))
         if not self.zones:
             warnings.append("No zones — use Fill Zone in Access Control.")
         if not self.gates:
             warnings.append("No scanners placed.")
+        elif not self._painted_queue_gates:
+            warnings.append("No queue lines painted — draw back-of-line → scanner in Access Control.")
         if not self._spawn_tiles:
             warnings.append("No walkable spawn tiles outside zones.")
         return warnings
@@ -388,7 +453,8 @@ class CrowdSimEngine:
         tiles = self.queues_by_gate.get(gate_id) or []
         if tiles:
             return tiles[0]  # tail — join back of line
-        return gx, gy
+        head = self.nearest_passable(gx, gy)
+        return head if head else (gx, gy)
 
     def queue_head_tile(self, gate_id: str, gx: int, gy: int) -> tuple[int, int]:
         tiles = self.queues_by_gate.get(gate_id) or []
@@ -465,13 +531,14 @@ class CrowdSimEngine:
         best = min(tiles, key=lambda t: _manhattan((from_tx, from_ty), t))
         return self.resolve_goal(best)
 
-    def near_queue(self, agent: SimAgent) -> bool:
+    def at_queue_tail(self, agent: SimAgent) -> bool:
         if not agent.target_gate_id:
             return False
         tiles = self.queues_by_gate.get(agent.target_gate_id) or []
         if not tiles:
             return False
-        return min(_manhattan((agent.tx, agent.ty), t) for t in tiles) <= 2
+        tail = tiles[0]
+        return _manhattan((agent.tx, agent.ty), tail) <= 2
 
     def on_queue_head(self, agent: SimAgent) -> bool:
         if not agent.target_gate_id:
@@ -540,7 +607,7 @@ class CrowdSimEngine:
             if self.tile_free(nxt[0], nxt[1], occ, agent.id):
                 agent.tx, agent.ty = nxt
                 agent.route.pop(0)
-                if self.near_queue(agent) and agent.target_gate_id:
+                if self.at_queue_tail(agent) and agent.target_gate_id:
                     agent.state = AgentState.QUEUING
                     agent.route = []
                 return
@@ -550,7 +617,7 @@ class CrowdSimEngine:
                 agent.route = []
                 return
 
-        if agent.target_gate_id and self.near_queue(agent):
+        if agent.target_gate_id and self.at_queue_tail(agent):
             agent.state = AgentState.QUEUING
 
     def tick_once(self) -> None:

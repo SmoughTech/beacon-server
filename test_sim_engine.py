@@ -1,6 +1,6 @@
 """Tests for tile-native crowd sim."""
 
-from sim_engine import AgentState, CrowdSimEngine, SimAgent, _bresenham_tiles, _rasterize_queue
+from sim_engine import AgentState, CrowdSimEngine, SimAgent, _bresenham_tiles, _manhattan, _rasterize_queue
 
 
 def test_bresenham_straight_line():
@@ -40,11 +40,36 @@ def test_engine_spawn_and_tick():
         }
     ]
     engine = CrowdSimEngine("evt", [], zones, gates, [], [])
+    assert engine.queues_by_gate.get("gate1")
+    gx, gy = engine._gate_positions()[0]
+    for tx, ty in engine._spawn_tiles:
+        assert _manhattan((tx, ty), (gx, gy)) >= 20 or len(engine._spawn_tiles) < 5
     engine.reset(ga_count=2, vip_count=0, spawn_interval=1)
     for _ in range(5):
         engine.tick_once()
     assert engine.stats["spawned"] >= 1
     assert all(a.tx >= 0 and a.ty >= 0 for a in engine.agents)
+
+
+def test_synthetic_queue_tail_to_head():
+    zones = [
+        {
+            "id": "ga",
+            "zone_class": "ga",
+            "polygon": [
+                {"x": 0.6, "y": 0.4},
+                {"x": 0.9, "y": 0.4},
+                {"x": 0.9, "y": 0.9},
+                {"x": 0.6, "y": 0.9},
+            ],
+        }
+    ]
+    gates = [{"id": "g1", "map_x": 0.5, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    paths = [{"tiles": [[x, 100] for x in range(20, 180)]}]
+    engine = CrowdSimEngine("evt", [], zones, gates, [], paths)
+    tiles = engine.queues_by_gate["g1"]
+    assert len(tiles) >= 2
+    assert tiles[0] != tiles[-1]
 
 
 def test_occupancy_blocks_same_tile():
