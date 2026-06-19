@@ -110,20 +110,9 @@
   }
 
   function refreshGateSnapGraphics() {
-    if (typeof decorateGateMarkers === "function") decorateGateMarkers();
     if (typeof drawAccessLayers === "function") drawAccessLayers();
-  }
-
-  function raiseGateMarkersAboveOverlay() {
-    const stage = getMapStage();
-    if (!stage) return;
-    stage.querySelectorAll(".marker.gate").forEach((el) => stage.appendChild(el));
-  }
-
-  function finishGateMarkerLayer() {
-    if (typeof currentTab === "undefined" || currentTab !== "access") return;
-    raiseGateMarkersAboveOverlay();
-    if (!gateDragState) decorateGateDragHandles();
+    if (typeof decorateGateMarkers === "function") decorateGateMarkers();
+    if (typeof decorateGateDragHandles === "function") decorateGateDragHandles();
   }
 
   function loadAccessLayerPrefs() {
@@ -1916,6 +1905,10 @@
     return polygon;
   }
 
+  function zoneLayerCapturesClicks() {
+    return accessTool === "fillZone" || accessTool === "select";
+  }
+
   function drawAccessLayers() {
     const svg = ensureZoneSvg();
     if (!svg) return;
@@ -1935,7 +1928,7 @@
       poly.setAttribute("fill", zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga);
       poly.setAttribute("stroke", selectedZoneId === zone.id ? "#6df7a7" : "rgba(255,255,255,0.55)");
       poly.setAttribute("stroke-width", selectedZoneId === zone.id ? "4" : "2");
-      poly.style.pointerEvents = "auto";
+      poly.style.pointerEvents = zoneLayerCapturesClicks() ? "auto" : "none";
       poly.onclick = (ev) => {
         ev.stopPropagation();
         selectZone(zone.id);
@@ -2153,8 +2146,6 @@
             : null;
       drawPortalSnapLayers(svg, onlyId);
     }
-
-    finishGateMarkerLayer();
   }
 
   function drawPortalFlowArrow(svg, gate, pair, isSelected) {
@@ -3391,6 +3382,7 @@
       if (showsAccessMapLayers()) {
         if (currentTab === "access") {
           decorateGateMarkers();
+          decorateGateDragHandles();
           drawSimLocationMarkers();
         }
         drawAccessLayers();
@@ -3399,7 +3391,6 @@
         if (svg && stage) stage.appendChild(svg);
         const simSvg = document.getElementById("simAgentSvg");
         if (simSvg && stage) stage.appendChild(simSvg);
-        finishGateMarkerLayer();
       }
     };
 
