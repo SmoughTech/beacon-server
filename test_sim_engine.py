@@ -194,6 +194,37 @@ def test_token_walks_queue_tiles_before_scan():
     assert token.stage == TokenStage.SCANNING
 
 
+def test_multiple_tokens_advance_through_queue():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[10, 10], [11, 10], [12, 10]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": 12 / 400, "y": 10 / 225},
+                {"x": 13 / 400, "y": 10 / 225},
+                {"x": 14 / 400, "y": 10 / 225},
+                {"x": 15 / 400, "y": 10 / 225},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    t1 = Token(id=1, ticket_class="ga", path_id="p1", path_index=2, tx=12, ty=10, target_gate_id="g1")
+    t2 = Token(id=2, ticket_class="ga", path_id="p1", path_index=2, tx=11, ty=10, target_gate_id="g1")
+    engine.tokens = [t1, t2]
+    engine._try_join_queue_from_path(t1)
+    assert t1.queue_index == 0
+    engine._try_join_queue_from_path(t2)
+    assert t2.stage == TokenStage.ON_PATH
+    for _ in range(40):
+        for token in list(engine.tokens):
+            token.step_cooldown = 0
+            engine.advance_token(token)
+    assert engine.stats["scanned"] >= 1
+
+
 def test_spawn_requires_spawn_point():
     engine = TokenFlowEngine("evt", [], [], [], [], [])
     assert engine.spawn_one("ga") is False

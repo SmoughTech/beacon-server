@@ -229,9 +229,10 @@ class TokenFlowEngine:
     def pick_gate(self, ticket_class: str, target_zone_id: str | None, from_tx: int, from_ty: int) -> dict[str, Any] | None:
         best: tuple[int, dict[str, Any]] | None = None
         start = (from_tx, from_ty)
-        for gate in self.gates:
-            if not _gate_admits(gate, ticket_class, target_zone_id):
-                continue
+        candidates = [g for g in self.gates if _gate_admits(g, ticket_class, target_zone_id)]
+        with_queue = [g for g in candidates if g["id"] in self.queues_by_gate]
+        ordered = with_queue + [g for g in candidates if g not in with_queue]
+        for gate in ordered:
             gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
             dist = _manhattan(start, (gx, gy))
             if best is None or dist < best[0]:
@@ -394,6 +395,14 @@ class TokenFlowEngine:
     def _is_adjacent(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
         return _manhattan(a, b) == 1
 
+    def _tile_blocked(self, tx: int, ty: int, except_id: int) -> bool:
+        for token in self.tokens:
+            if token.id == except_id:
+                continue
+            if token.tx == tx and token.ty == ty:
+                return True
+        return False
+
     def enter_queue(self, token: Token) -> None:
         if token.stage == TokenStage.IN_QUEUE:
             return
@@ -401,33 +410,60 @@ class TokenFlowEngine:
         token.queue_index = None
         token.step_cooldown = 0
 
-    def _join_queue_polyline(self, token: Token, gate_id: str) -> bool:
+    def _try_join_queue_at_tail(self, token: Token) -> bool:
+        gate_id = token.target_gate_id
+        if not gate_id:
+            return False
         tiles = self.queue_tiles(gate_id)
         if not tiles:
             return False
-        pos = (token.tx, token.ty)
-        scan_idx = self.queue_scan_index(gate_id)
-        for i, tile in enumerate(tiles):
-            if tile == pos and i <= scan_idx:
-                token.queue_index = i
-                return True
+        if self.queue_index_taken(gate_id, 0, token.id):
+            return False
+
         tail = tiles[0]
+        pos = (token.tx, token.ty)
+
         if pos == tail:
+            self.enter_queue(token)
             token.queue_index = 0
             return True
-        if self._is_adjacent(pos, tail) and not self.queue_tile_taken(tail[0], tail[1], token.id):
+
+        if self._is_adjacent(pos, tail) and not self._tile_blocked(tail[0], tail[1], token.id):
             token.tx, token.ty = tail
+            self.enter_queue(token)
             token.queue_index = 0
             token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
             return True
+
+        if _manhattan(pos, tail) <= 6:
+            if self.greedy_step_toward(token, tail, lambda x, y: self._tile_blocked(x, y, token.id)):
+                token.step_cooldown = PATH_STEP_EVERY_TICKS - 1
+                if (token.tx, token.ty) == tail:
+                    self.enter_queue(token)
+                    token.queue_index = 0
+                return True
         return False
 
     def _try_join_queue_from_path(self, token: Token) -> bool:
         gate_id = token.target_gate_id
-        if not gate_id or not self.queue_tiles(gate_id):
+        if not gate_id:
             return False
-        self.enter_queue(token)
-        return self._join_queue_polyline(token, gate_id)
+        tiles = self.queue_tiles(gate_id)
+        if not tiles:
+            return False
+
+        scan_idx = self.queue_scan_index(gate_id)
+        pos = (token.tx, token.ty)
+        for i, tile in enumerate(tiles):
+            if tile != pos or i > scan_idx:
+                continue
+            if self.queue_index_taken(gate_id, i, token.id):
+                break
+            self.enter_queue(token)
+            token.queue_index = i
+            return True
+
+        return self._try_join_queue_at_tail(token)
 
     def _start_scan(self, token: Token) -> None:
         token.stage = TokenStage.SCANNING
@@ -472,7 +508,7 @@ class TokenFlowEngine:
             return
 
         if token.queue_index is None:
-            if self._join_queue_polyline(token, gate_id):
+            if self._try_join_queue_at_tail(token):
                 return
             return
 
@@ -486,11 +522,8 @@ class TokenFlowEngine:
             return
         if self.queue_index_taken(gate_id, next_idx, token.id):
             return
-        nxt = tiles[next_idx]
-        if self.queue_tile_taken(nxt[0], nxt[1], token.id):
-            return
         token.queue_index = next_idx
-        token.tx, token.ty = nxt
+        token.tx, token.ty = tiles[next_idx]
         token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
 
     def advance_token(self, token: Token) -> None:
@@ -517,14 +550,12 @@ class TokenFlowEngine:
         if track.at_downstream_end(token.path_index):
             if self._try_join_queue_from_path(token):
                 return
-            self.enter_queue(token)
             return
 
         nxt_idx = track.next_index(token.path_index)
         if nxt_idx is None:
             if self._try_join_queue_from_path(token):
                 return
-            self.enter_queue(token)
             return
         if self.path_tile_taken(token.path_id, nxt_idx, token.id):
             return
