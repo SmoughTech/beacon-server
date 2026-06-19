@@ -84,12 +84,14 @@ class AccessQueueUpdate(BaseModel):
 
 
 PATH_WIDTH_TILES = (1, 2, 4)
+PATH_FLOW_DIRECTIONS = ("forward", "reverse")
 
 
 class AccessPathCreate(BaseModel):
     name: str = Field(default="Path", min_length=1, max_length=120)
     width_tiles: int = Field(default=1, ge=1, le=4)
     tiles: List[List[int]] = Field(min_length=1)
+    flow_direction: str = Field(default="forward", max_length=16)
     updated_by: Optional[str] = "dash_access"
 
     @model_validator(mode="after")
@@ -98,6 +100,8 @@ class AccessPathCreate(BaseModel):
             raise ValueError("Path width must be 1, 2, or 4 tiles")
         if not self.tiles:
             raise ValueError("Path needs at least 1 painted tile")
+        if normalize_path_flow_direction(self.flow_direction) not in PATH_FLOW_DIRECTIONS:
+            raise ValueError("Path flow must be forward or reverse")
         return self
 
 
@@ -105,6 +109,7 @@ class AccessPathUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     width_tiles: Optional[int] = Field(default=None, ge=1, le=4)
     tiles: Optional[List[List[int]]] = None
+    flow_direction: Optional[str] = Field(default=None, max_length=16)
     updated_by: Optional[str] = "dash_access"
 
     @model_validator(mode="after")
@@ -113,7 +118,29 @@ class AccessPathUpdate(BaseModel):
             raise ValueError("Path width must be 1, 2, or 4 tiles")
         if self.tiles is not None and not self.tiles:
             raise ValueError("Path needs at least 1 painted tile")
+        if self.flow_direction is not None and normalize_path_flow_direction(self.flow_direction) not in PATH_FLOW_DIRECTIONS:
+            raise ValueError("Path flow must be forward or reverse")
         return self
+
+
+class AccessSpawnPointCreate(BaseModel):
+    name: str = Field(default="Spawn", min_length=1, max_length=120)
+    path_id: str = Field(min_length=1, max_length=80)
+    tile_index: int = Field(ge=0)
+    map_x: float = Field(ge=0.0, le=1.0)
+    map_y: float = Field(ge=0.0, le=1.0)
+    ticket_class: str = Field(default="ga", max_length=40)
+    updated_by: Optional[str] = "dash_access"
+
+
+class AccessSpawnPointUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    path_id: Optional[str] = Field(default=None, max_length=80)
+    tile_index: Optional[int] = Field(default=None, ge=0)
+    map_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    map_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    ticket_class: Optional[str] = Field(default=None, max_length=40)
+    updated_by: Optional[str] = "dash_access"
 
 
 class ScannerAccessUpdate(BaseModel):
@@ -313,6 +340,13 @@ def normalize_path_width(value: Optional[int]) -> int:
     return raw
 
 
+def normalize_path_flow_direction(value: Optional[str]) -> str:
+    raw = (value or "forward").strip().lower()
+    if raw in {"reverse", "backward", "back", "flipped", "flip"}:
+        return "reverse"
+    return "forward"
+
+
 def queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -328,13 +362,37 @@ def queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def path_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     width_tiles = normalize_path_width(row["width_tiles"] if "width_tiles" in row.keys() else 1)
+    flow_direction = normalize_path_flow_direction(
+        row["flow_direction"] if "flow_direction" in row.keys() else "forward"
+    )
     return {
         "id": row["id"],
         "event_id": row["event_id"],
         "name": row["name"],
         "width_tiles": width_tiles,
         "widthTiles": width_tiles,
+        "flow_direction": flow_direction,
+        "flowDirection": flow_direction,
         "tiles": _json_to_tiles(row["tiles_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def spawn_point_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    ticket_class = normalize_zone_class(row["ticket_class"] if "ticket_class" in row.keys() else "ga")
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "path_id": row["path_id"],
+        "tile_index": int(row["tile_index"]),
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "ticket_class": ticket_class,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
@@ -493,6 +551,36 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_access_paths_event_id
         ON access_paths(event_id)
+        """
+    )
+
+    path_columns = {row["name"] for row in conn.execute("PRAGMA table_info(access_paths)").fetchall()}
+    if "flow_direction" not in path_columns:
+        conn.execute(
+            "ALTER TABLE access_paths ADD COLUMN flow_direction TEXT NOT NULL DEFAULT 'forward'"
+        )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_spawn_points (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            path_id TEXT NOT NULL,
+            tile_index INTEGER NOT NULL,
+            map_x REAL NOT NULL,
+            map_y REAL NOT NULL,
+            ticket_class TEXT NOT NULL DEFAULT 'ga',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_access_spawn_points_event_id
+        ON access_spawn_points(event_id)
         """
     )
 
@@ -1040,13 +1128,14 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
         path_id = "path_" + uuid4().hex[:12]
         timestamp = now_iso()
         width_tiles = normalize_path_width(payload.width_tiles)
+        flow_direction = normalize_path_flow_direction(payload.flow_direction)
         with get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO access_paths (
-                    id, event_id, name, width_tiles, tiles_json,
+                    id, event_id, name, width_tiles, tiles_json, flow_direction,
                     created_at, updated_at, updated_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     path_id,
@@ -1054,6 +1143,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                     payload.name.strip() or "Path",
                     width_tiles,
                     _tiles_to_json(payload.tiles),
+                    flow_direction,
                     timestamp,
                     timestamp,
                     payload.updated_by,
@@ -1087,14 +1177,22 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 if payload.tiles is not None
                 else existing["tiles_json"]
             )
+            flow_direction = (
+                normalize_path_flow_direction(payload.flow_direction)
+                if payload.flow_direction is not None
+                else normalize_path_flow_direction(
+                    existing["flow_direction"] if "flow_direction" in existing.keys() else "forward"
+                )
+            )
             timestamp = now_iso()
             conn.execute(
                 """
                 UPDATE access_paths
-                SET name = ?, width_tiles = ?, tiles_json = ?, updated_at = ?, updated_by = ?
+                SET name = ?, width_tiles = ?, tiles_json = ?, flow_direction = ?,
+                    updated_at = ?, updated_by = ?
                 WHERE id = ? AND event_id = ?
                 """,
-                (name, width_tiles, tiles_json, timestamp, payload.updated_by, path_id, event_id),
+                (name, width_tiles, tiles_json, flow_direction, timestamp, payload.updated_by, path_id, event_id),
             )
             conn.commit()
             row = conn.execute(
@@ -1112,6 +1210,129 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.commit()
         return {"deleted": True, "id": path_id}
+
+    @router.get("/events/{event_id}/access-spawn-points")
+    def list_spawn_points(event_id: str):
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM access_spawn_points
+                WHERE event_id = ?
+                ORDER BY name COLLATE NOCASE ASC
+                """,
+                (event_id,),
+            ).fetchall()
+        return [spawn_point_row_to_dict(row) for row in rows]
+
+    @router.post("/events/{event_id}/access-spawn-points")
+    def create_spawn_point(event_id: str, payload: AccessSpawnPointCreate):
+        spawn_id = "spawn_" + uuid4().hex[:12]
+        timestamp = now_iso()
+        ticket_class = normalize_zone_class(payload.ticket_class)
+        with get_connection() as conn:
+            path = conn.execute(
+                "SELECT id FROM access_paths WHERE id = ? AND event_id = ?",
+                (payload.path_id, event_id),
+            ).fetchone()
+            if path is None:
+                raise HTTPException(status_code=400, detail="Unknown path")
+            conn.execute(
+                """
+                INSERT INTO access_spawn_points (
+                    id, event_id, name, path_id, tile_index, map_x, map_y, ticket_class,
+                    created_at, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    spawn_id,
+                    event_id,
+                    payload.name.strip() or "Spawn",
+                    payload.path_id,
+                    int(payload.tile_index),
+                    payload.map_x,
+                    payload.map_y,
+                    ticket_class,
+                    timestamp,
+                    timestamp,
+                    payload.updated_by,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_spawn_points WHERE id = ? AND event_id = ?",
+                (spawn_id, event_id),
+            ).fetchone()
+        return spawn_point_row_to_dict(row)
+
+    @router.put("/events/{event_id}/access-spawn-points/{spawn_id}")
+    def update_spawn_point(event_id: str, spawn_id: str, payload: AccessSpawnPointUpdate):
+        with get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM access_spawn_points WHERE id = ? AND event_id = ?",
+                (spawn_id, event_id),
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Spawn point not found")
+
+            path_id = payload.path_id if payload.path_id is not None else existing["path_id"]
+            if payload.path_id is not None:
+                path = conn.execute(
+                    "SELECT id FROM access_paths WHERE id = ? AND event_id = ?",
+                    (path_id, event_id),
+                ).fetchone()
+                if path is None:
+                    raise HTTPException(status_code=400, detail="Unknown path")
+
+            name = payload.name.strip() if payload.name is not None else existing["name"]
+            tile_index = (
+                int(payload.tile_index)
+                if payload.tile_index is not None
+                else int(existing["tile_index"])
+            )
+            map_x = payload.map_x if payload.map_x is not None else existing["map_x"]
+            map_y = payload.map_y if payload.map_y is not None else existing["map_y"]
+            ticket_class = (
+                normalize_zone_class(payload.ticket_class)
+                if payload.ticket_class is not None
+                else normalize_zone_class(existing["ticket_class"])
+            )
+            timestamp = now_iso()
+            conn.execute(
+                """
+                UPDATE access_spawn_points
+                SET name = ?, path_id = ?, tile_index = ?, map_x = ?, map_y = ?, ticket_class = ?,
+                    updated_at = ?, updated_by = ?
+                WHERE id = ? AND event_id = ?
+                """,
+                (
+                    name,
+                    path_id,
+                    tile_index,
+                    map_x,
+                    map_y,
+                    ticket_class,
+                    timestamp,
+                    payload.updated_by,
+                    spawn_id,
+                    event_id,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM access_spawn_points WHERE id = ? AND event_id = ?",
+                (spawn_id, event_id),
+            ).fetchone()
+        return spawn_point_row_to_dict(row)
+
+    @router.delete("/events/{event_id}/access-spawn-points/{spawn_id}")
+    def delete_spawn_point(event_id: str, spawn_id: str):
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM access_spawn_points WHERE id = ? AND event_id = ?",
+                (spawn_id, event_id),
+            )
+            conn.commit()
+        return {"deleted": True, "id": spawn_id}
 
     app.include_router(router)
 

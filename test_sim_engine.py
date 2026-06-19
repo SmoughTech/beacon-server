@@ -1,86 +1,61 @@
-"""Tests for tile-native crowd sim."""
+"""Tests for token flow processor."""
 
-from sim_engine import AgentState, CrowdSimEngine, SimAgent, _bresenham_tiles, _manhattan, _rasterize_queue
-
-
-def test_bresenham_straight_line():
-    tiles = _bresenham_tiles(0, 0, 3, 0)
-    assert tiles == [(0, 0), (1, 0), (2, 0), (3, 0)]
+from sim_engine import PathTrack, TokenFlowEngine, TokenStage
 
 
-def test_rasterize_queue_two_points():
-    pts = [{"x": 0.1, "y": 0.5}, {"x": 0.2, "y": 0.5}]
-    tiles = _rasterize_queue(pts)
-    assert len(tiles) >= 2
-    assert tiles[0] != tiles[-1]
+def test_path_track_flow_forward():
+    track = PathTrack("p1", [(0, 0), (1, 0), (2, 0)], "forward")
+    assert track.next_index(0) == 1
+    assert track.next_index(1) == 2
+    assert track.next_index(2) is None
+    assert track.at_downstream_end(2)
 
 
-def test_engine_spawn_and_tick():
-    zones = [
-        {
-            "id": "ga_lawn",
-            "name": "GA",
-            "zone_class": "ga",
-            "polygon": [
-                {"x": 0.55, "y": 0.35},
-                {"x": 0.95, "y": 0.35},
-                {"x": 0.95, "y": 0.95},
-                {"x": 0.55, "y": 0.95},
-            ],
-        }
-    ]
+def test_path_track_flow_reverse():
+    track = PathTrack("p1", [(0, 0), (1, 0), (2, 0)], "reverse")
+    assert track.next_index(2) == 1
+    assert track.at_downstream_end(0)
+
+
+def test_token_deleted_after_scan():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
     gates = [
         {
-            "id": "gate1",
+            "id": "g1",
             "map_x": 0.5,
             "map_y": 0.5,
-            "zone_a_id": "outside",
-            "zone_b_id": "ga_lawn",
             "allowed_classes": ["ga"],
+            "zone_b_id": "ga",
         }
     ]
-    engine = CrowdSimEngine("evt", [], zones, gates, [], [])
-    assert engine.queues_by_gate.get("gate1")
-    gx, gy = engine._gate_positions()[0]
-    for tx, ty in engine._spawn_tiles:
-        assert _manhattan((tx, ty), (gx, gy)) >= 20 or len(engine._spawn_tiles) < 5
-    engine.reset(ga_count=2, vip_count=0, spawn_interval=1)
-    for _ in range(5):
-        engine.tick_once()
-    assert engine.stats["spawned"] >= 1
-    assert all(a.tx >= 0 and a.ty >= 0 for a in engine.agents)
-
-
-def test_synthetic_queue_tail_to_head():
-    zones = [
+    paths = [
         {
-            "id": "ga",
-            "zone_class": "ga",
-            "polygon": [
-                {"x": 0.6, "y": 0.4},
-                {"x": 0.9, "y": 0.4},
-                {"x": 0.9, "y": 0.9},
-                {"x": 0.6, "y": 0.9},
-            ],
+            "id": "path1",
+            "tiles": [[10, 10], [11, 10], [12, 10]],
+            "flow_direction": "forward",
         }
     ]
-    gates = [{"id": "g1", "map_x": 0.5, "map_y": 0.5, "allowed_classes": ["ga"]}]
-    paths = [{"tiles": [[x, 100] for x in range(20, 180)]}]
-    engine = CrowdSimEngine("evt", [], zones, gates, [], paths)
-    tiles = engine.queues_by_gate["g1"]
-    assert len(tiles) >= 2
-    assert tiles[0] != tiles[-1]
+    spawn_points = [
+        {
+            "id": "sp1",
+            "path_id": "path1",
+            "tile_index": 0,
+            "map_x": 0.025,
+            "map_y": 0.045,
+            "ticket_class": "ga",
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawn_points, [])
+    engine.reset(ga_count=1, vip_count=0, spawn_interval=100)
+    assert len(engine.tokens) == 1
+    token = engine.tokens[0]
+    token.stage = TokenStage.SCANNING
+    token.scan_timer = 1
+    engine.advance_token(token)
+    assert len(engine.tokens) == 0
+    assert engine.stats["scanned"] == 1
 
 
-def test_occupancy_blocks_same_tile():
-    engine = CrowdSimEngine("evt", [], [], [], [], [])
-    engine.agents.append(
-        SimAgent(id=1, ticket_class="ga", tx=10, ty=10, state=AgentState.WALKING)
-    )
-    engine.agents.append(
-        SimAgent(id=2, ticket_class="ga", tx=11, ty=10, state=AgentState.WALKING)
-    )
-    occ = engine.occupancy()
-    assert occ[(10, 10)] == 1
-    assert occ[(11, 10)] == 2
-    assert len(occ) == 2
+def test_spawn_requires_spawn_point():
+    engine = TokenFlowEngine("evt", [], [], [], [], [])
+    assert engine.spawn_one("ga") is False

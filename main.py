@@ -17,6 +17,7 @@ from access_control import (
     path_row_to_dict,
     queue_row_to_dict,
     register_access_control,
+    spawn_point_row_to_dict,
     zone_row_to_dict,
 )
 
@@ -1090,6 +1091,7 @@ register_sim_engine(
     wrstops_gate_row_to_dict,
     queue_row_to_dict,
     path_row_to_dict,
+    spawn_point_row_to_dict,
 )
 
 
@@ -1156,7 +1158,7 @@ DASH_HTML = r'''
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
   <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="sim">Crowd Sim</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
-  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (2ft, 400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
+  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (2ft, 400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerSpawnPoints" checked> Spawn points</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
   <div class="dashSearch"><input id="dashSearchInput" placeholder="Search scanners, POIs, survey paths, anchors, device sweeps..." onkeydown="if(event.key==='Enter')dashSearch()" oninput="if(!this.value.trim())clearDashSearch()"><button class="primary" onclick="dashSearch()">Search</button><button class="ghost" onclick="clearDashSearch()">Clear</button><div id="dashSearchResults" class="searchResults"></div></div>
   <div class="layout">
@@ -1168,7 +1170,7 @@ DASH_HTML = r'''
       <section id="tab-remoteSurvey" class="hidden"><label>Survey name</label><input id="rsName" placeholder="North Gate to Box Office" /><div class="row"><div><label>Mode</label><select id="rsMode"><option value="direct_path">Direct Path</option><option value="area_walk">Area Walk</option></select></div><div><label>Path Type</label><select id="rsType"><option value="guest">Guest</option><option value="staff">Staff</option><option value="cart">Cart</option><option value="restricted">Restricted</option><option value="emergency">Emergency</option></select></div></div><div class="row"><button onclick="mapClickMode='surveyStart'; setStatus('Click map for survey start point.')">Set Start on Map</button><button onclick="mapClickMode='surveyEnd'; setStatus('Click map for survey destination/end point.')">Set End on Map</button></div><div class="small" id="rsMapInfo">Start/end map anchors not set.</div><label>GPS coordinates from Google Maps</label><textarea id="rsPoints" placeholder="38.896889, -77.036583\n38.896700, -77.036200\n38.896500, -77.035900"></textarea><div class="row"><button class="primary" onclick="saveRemoteSurvey()">Save Survey Path</button><button onclick="previewRemoteSurvey()">Preview</button></div></section>
       <section id="tab-calibration" class="hidden"><p class="muted">Remote calibration lets you click a known map point, paste its latitude/longitude from Google Maps, and save it as a calibration anchor.</p><div class="row"><button onclick="mapClickMode='calibration'; setStatus('Click map where this GPS coordinate belongs.')">Set Map Point</button><button onclick="loadAnchors()">Refresh Anchors</button><button onclick="inferCalibrationGpsFromMap()">Infer GPS from Selected Map Point</button></div><div class="small" id="calMapInfo">No map point selected.</div><label>Latitude</label><input id="calLat" placeholder="38.896889" /><label>Longitude</label><input id="calLng" placeholder="-77.036583" /><div class="row"><button class="primary" onclick="saveCalibrationAnchor()">Save Anchor</button></div><br /><div class="list" id="anchorList"></div></section><section id="tab-messages" class="hidden"><p class="muted">Field-test message board. Use this for bug reports, feature requests, notes, or test feedback.</p><div class="card"><label>Name</label><input id="msgName" placeholder="Your name" /><label>Subject</label><input id="msgSubject" placeholder="Bug, idea, question..." /><label>Body</label><textarea id="msgBody" placeholder="What happened? What should change?" style="width:100%;min-height:120px;background:#0d1520;color:#f7fbff;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:10px;"></textarea><div class="row"><button class="primary" onclick="postMessageBoard()">Post Message</button><button onclick="loadMessageBoard()">Refresh</button></div></div><div class="list" id="messageList"></div></section>
       <section id="tab-sim" class="hidden">
-        <p class="muted">Tile-native crowd sim. Guests follow painted paths, queue at scanners, then spread into their zone area tiles.</p>
+        <p class="muted">Token flow sim. Place spawn points on paths in Access Control. Tokens move with path flow, queue at scanners, then are removed when scanned.</p>
         <div class="row">
           <div><label>GA guests</label><input id="simGaCount" type="number" min="0" max="500" value="30" /></div>
           <div><label>VIP guests</label><input id="simVipCount" type="number" min="0" max="200" value="0" /></div>
@@ -1190,6 +1192,7 @@ DASH_HTML = r'''
           <button data-access-tool="select" class="primary" onclick="setAccessTool('select')">Select</button>
           <button data-access-tool="drawBarrier" onclick="setAccessTool('drawBarrier')">Draw Barrier</button>
           <button data-access-tool="drawPath" onclick="setAccessTool('drawPath')">Draw Path</button>
+          <button data-access-tool="placeSpawn" onclick="setAccessTool('placeSpawn')">Place Spawn</button>
           <button data-access-tool="drawQueue" onclick="setAccessTool('drawQueue')">Draw Queue</button>
           <button data-access-tool="fillZone" onclick="setAccessTool('fillZone')">Fill Zone</button>
           <button data-access-tool="linkPortal" onclick="setAccessTool('linkPortal')">Access Rules</button>
@@ -1221,18 +1224,34 @@ DASH_HTML = r'''
         <div id="accessSectionPaths" class="accessSection hidden">
           <h3>Paths</h3>
           <div id="accessPathSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Drag to paint preferred movement corridors. Width is in 2ft tiles (1 = 2ft, 2 = 4ft, 4 = 8ft).</p>
+            <p class="small" style="margin:0 0 8px">Drag to paint corridors in the order guests should walk. First painted end = upstream; set flow direction after saving.</p>
             <div class="row">
               <div><label>Path name</label><input id="accessPathName" placeholder="Main walkway" /></div>
               <div><label>Brush width</label><select id="accessPathWidth"><option value="1">1 tile (2ft)</option><option value="2">2 tiles (4ft)</option><option value="4">4 tiles (8ft)</option></select></div>
             </div>
             <div class="row" style="margin-top:8px">
+              <div><label>Flow (selected path)</label><select id="accessPathFlow"><option value="forward">With paint order →</option><option value="reverse">Reverse paint order ←</option></select></div>
+            </div>
+            <div class="row" style="margin-top:8px">
               <button class="primary" onclick="finishDraftPath()">Finish Path</button>
+              <button onclick="saveSelectedPathFlow()">Save Flow</button>
               <button onclick="clearDraftPathTiles()">Clear paint</button>
               <button onclick="cancelDraftPath()">Cancel Draw</button>
             </div>
           </div>
+          <div id="accessPathEditor"></div>
           <div class="list" id="accessPathList"></div>
+        </div>
+        <div id="accessSectionSpawns" class="accessSection hidden">
+          <h3>Spawn Points</h3>
+          <div id="accessSpawnSection" class="accessToolPanel hidden">
+            <p class="small" style="margin:0 0 8px">Click a painted path to snap a token spawn. Guests appear here and flow along the path direction.</p>
+            <div class="row">
+              <div><label>Spawn name</label><input id="accessSpawnName" placeholder="Main entrance spawn" /></div>
+              <div><label>Ticket class</label><select id="accessSpawnClass"><option value="ga">GA</option><option value="vip">VIP</option><option value="staff">Staff</option><option value="vendor">Vendor</option></select></div>
+            </div>
+          </div>
+          <div class="list" id="accessSpawnList"></div>
         </div>
         <div id="accessSectionQueues" class="accessSection hidden">
           <h3>Queues</h3>
@@ -1513,8 +1532,8 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.14.0"></script>
-<script src="/static/dash/crowd-sim.js?v=1.2.0"></script>
+<script src="/static/dash/access-control.js?v=3.15.0"></script>
+<script src="/static/dash/crowd-sim.js?v=1.3.0"></script>
 </body>
 </html>
 '''

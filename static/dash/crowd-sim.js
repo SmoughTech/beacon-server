@@ -15,7 +15,9 @@
   let simSvg = null;
 
   const STATE_COLORS = {
+    on_path: "#42a5f5",
     walking: "#42a5f5",
+    in_queue: "#ffb300",
     queuing: "#ffb300",
     scanning: "#ab47bc",
     idle: "#66bb6a",
@@ -97,7 +99,7 @@
     const el = document.getElementById("simStats");
     if (!el) return;
     const s = simStats || {};
-    let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • idle ${s.idle || 0} • on map ${simAgents.length}`;
+    let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • active ${s.active ?? simAgents.length} • on map ${simAgents.length}`;
     if (simPlaying) text += " • ▶ playing";
     if (simWarnings.length) {
       text += " • ⚠ " + simWarnings.join(" ");

@@ -43,6 +43,7 @@
   let accessZones = [];
   let accessQueues = [];
   let accessPaths = [];
+  let accessSpawnPoints = [];
   let accessTool = "select";
   let draftBarrierPoints = [];
   let draftBarrierTiles = new Set();
@@ -59,6 +60,7 @@
   let selectedZoneId = null;
   let selectedQueueId = null;
   let selectedPathId = null;
+  let selectedSpawnId = null;
   let fillZoneClass = "ga";
   let portalHeadingPreview = null;
   let portalFlowFlipPreview = null;
@@ -81,6 +83,7 @@
     workLocations: true,
     tileGrid: true,
     paths: true,
+    spawnPoints: true,
     queues: true,
   };
   let accessSimLocations = [];
@@ -132,6 +135,7 @@
       accessLayerWorkLocs: "workLocations",
       accessLayerTileGrid: "tileGrid",
       accessLayerPaths: "paths",
+      accessLayerSpawnPoints: "spawnPoints",
       accessLayerQueues: "queues",
     };
     Object.entries(map).forEach(([id, key]) => {
@@ -292,18 +296,20 @@
   }
 
   function isAccessCategoryVisible(category) {
-    if (accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal") {
+    if (accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal" || accessTool === "placeSpawn") {
       return false;
     }
     const toolByCategory = {
       barriers: "drawBarrier",
       paths: "drawPath",
+      spawns: "placeSpawn",
       queues: "drawQueue",
       zones: "fillZone",
     };
     const selectedByCategory = {
       barriers: selectedBarrierId,
       paths: selectedPathId,
+      spawns: selectedSpawnId,
       queues: selectedQueueId,
       zones: selectedZoneId,
     };
@@ -319,6 +325,7 @@
     const sectionIds = {
       barriers: "accessSectionBarriers",
       paths: "accessSectionPaths",
+      spawns: "accessSectionSpawns",
       queues: "accessSectionQueues",
       zones: "accessSectionZones",
     };
@@ -332,7 +339,7 @@
     if (hint) {
       hint.classList.toggle(
         "hidden",
-        anyCategoryVisible || accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal"
+        anyCategoryVisible || accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal" || accessTool === "placeSpawn"
       );
     }
 
@@ -348,6 +355,8 @@
     if (queueSection) queueSection.classList.toggle("hidden", accessTool !== "drawQueue");
     const pathSection = document.getElementById("accessPathSection");
     if (pathSection) pathSection.classList.toggle("hidden", accessTool !== "drawPath");
+    const spawnSection = document.getElementById("accessSpawnSection");
+    if (spawnSection) spawnSection.classList.toggle("hidden", accessTool !== "placeSpawn");
     const zoneEditor = document.getElementById("accessZoneSection");
     if (zoneEditor) zoneEditor.classList.toggle("hidden", accessTool !== "fillZone");
 
@@ -355,7 +364,7 @@
 
     const mapWrap = document.getElementById("mapWrap");
     if (mapWrap) {
-      mapWrap.classList.toggle("accessPaintCursor", accessTool === "drawPath" || accessTool === "drawBarrier");
+      mapWrap.classList.toggle("accessPaintCursor", accessTool === "drawPath" || accessTool === "drawBarrier" || accessTool === "placeSpawn");
     }
   }
 
@@ -581,6 +590,125 @@
       const { tx, ty } = parseTileKey(key);
       return [tx, ty];
     });
+  }
+
+  function bresenhamGridTiles(x0, y0, x1, y1) {
+    const tiles = [];
+    let cx = x0;
+    let cy = y0;
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    while (true) {
+      tiles.push([cx, cy]);
+      if (cx === x1 && cy === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) {
+        err -= dy;
+        cx += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        cy += sy;
+      }
+    }
+    return tiles;
+  }
+
+  function orderedPathTilesFromPaint(tileSet, vertices) {
+    const ordered = [];
+    const seen = new Set();
+    if (vertices.length >= 2) {
+      for (let i = 0; i < vertices.length - 1; i++) {
+        const a = gridFromNorm(vertices[i].x, vertices[i].y);
+        const b = gridFromNorm(vertices[i + 1].x, vertices[i + 1].y);
+        for (const [tx, ty] of bresenhamGridTiles(a.gx, a.gy, b.gx, b.gy)) {
+          const k = tileKey(tx, ty);
+          if (tileSet.has(k) && !seen.has(k)) {
+            seen.add(k);
+            ordered.push([tx, ty]);
+          }
+        }
+      }
+    }
+    for (const k of tileSet) {
+      if (!seen.has(k)) {
+        const { tx, ty } = parseTileKey(k);
+        ordered.push([tx, ty]);
+      }
+    }
+    return ordered;
+  }
+
+  function snapToPathTile(normX, normY) {
+    const { gx, gy } = gridFromNorm(normX, normY);
+    let best = null;
+    let bestDist = Infinity;
+    for (const path of accessPaths) {
+      const tiles = path.tiles || [];
+      for (let i = 0; i < tiles.length; i++) {
+        const [tx, ty] = tiles[i];
+        const d = Math.abs(tx - gx) + Math.abs(ty - gy);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { path_id: path.id, tile_index: i, tx, ty };
+        }
+      }
+    }
+    if (!best || bestDist > 10) return null;
+    return {
+      ...best,
+      map_x: (best.tx + 0.5) / TILE_COLS,
+      map_y: (best.ty + 0.5) / TILE_ROWS,
+    };
+  }
+
+  function drawPathFlowArrows(svg, path) {
+    const tiles = path.tiles || [];
+    if (tiles.length < 2) return;
+    const reverse = (path.flow_direction || path.flowDirection || "forward") === "reverse";
+    const step = Math.max(3, Math.floor(tiles.length / 7));
+    for (let i = step; i < tiles.length; i += step) {
+      const toIdx = reverse ? tiles.length - 1 - i : i;
+      const fromIdx = reverse ? toIdx + 1 : toIdx - 1;
+      if (fromIdx < 0 || fromIdx >= tiles.length) continue;
+      const [x0, y0] = tiles[fromIdx];
+      const [x1, y1] = tiles[toIdx];
+      const ax = ((x0 + 0.5) / TILE_COLS) * SVG_W;
+      const ay = ((y0 + 0.5) / TILE_ROWS) * SVG_H;
+      const bx = ((x1 + 0.5) / TILE_COLS) * SVG_W;
+      const by = ((y1 + 0.5) / TILE_ROWS) * SVG_H;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(ax));
+      line.setAttribute("y1", String(ay));
+      line.setAttribute("x2", String(bx));
+      line.setAttribute("y2", String(by));
+      line.setAttribute("stroke", selectedPathId === path.id ? "#ffe082" : "#ffca28");
+      line.setAttribute("stroke-width", "3");
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("opacity", "0.92");
+      line.style.pointerEvents = "none";
+      svg.appendChild(line);
+      const rad = Math.atan2(by - ay, bx - ax);
+      const wing = 0.45;
+      const headLen = 8;
+      const head = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      const hx = bx;
+      const hy = by;
+      head.setAttribute(
+        "points",
+        [
+          `${hx},${hy}`,
+          `${hx + Math.cos(rad + Math.PI + wing) * headLen},${hy + Math.sin(rad + Math.PI + wing) * headLen}`,
+          `${hx + Math.cos(rad + Math.PI - wing) * headLen},${hy + Math.sin(rad + Math.PI - wing) * headLen}`,
+        ].join(" ")
+      );
+      head.setAttribute("fill", selectedPathId === path.id ? "#ffe082" : "#ffca28");
+      head.style.pointerEvents = "none";
+      svg.appendChild(head);
+    }
   }
 
   function snapQueuePoint(p) {
@@ -1652,7 +1780,42 @@
         selectedPathId === path.id
       );
       svg.appendChild(wrap);
+      if (accessLayers.paths) drawPathFlowArrows(svg, path);
     });
+
+    if (accessLayers.spawnPoints) {
+      accessSpawnPoints.forEach((sp) => {
+        const mx = sp.map_x ?? sp.mapX ?? 0.5;
+        const my = sp.map_y ?? sp.mapY ?? 0.5;
+        const cx = mx * SVG_W;
+        const cy = my * SVG_H;
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.style.pointerEvents = "auto";
+        g.onclick = (ev) => {
+          ev.stopPropagation();
+          selectSpawnPoint(sp.id);
+        };
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", String(cx));
+        circle.setAttribute("cy", String(cy));
+        circle.setAttribute("r", selectedSpawnId === sp.id ? "7" : "5.5");
+        circle.setAttribute("fill", selectedSpawnId === sp.id ? "#81c784" : "#4caf50");
+        circle.setAttribute("stroke", "#fff");
+        circle.setAttribute("stroke-width", "1.2");
+        g.appendChild(circle);
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", String(cx));
+        label.setAttribute("y", String(cy + 3));
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("fill", "#fff");
+        label.setAttribute("font-size", "8");
+        label.setAttribute("font-weight", "700");
+        label.textContent = "S";
+        label.style.pointerEvents = "none";
+        g.appendChild(label);
+        svg.appendChild(g);
+      });
+    }
 
     if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
       const draftPts = draftBarrierPoints.slice();
@@ -2012,6 +2175,11 @@
     } catch {
       accessPaths = [];
     }
+    try {
+      accessSpawnPoints = await api(`/events/${eventId}/access-spawn-points`);
+    } catch {
+      accessSpawnPoints = [];
+    }
     accessSimLocations = await api(`/events/${eventId}/sim-locations`);
     renderAccessLists();
     syncAccessToolPanels();
@@ -2033,6 +2201,12 @@
       selectedBarrierId = null;
       selectedZoneId = null;
       selectedQueueId = null;
+      selectedSpawnId = null;
+    } else if (tool === "placeSpawn") {
+      selectedBarrierId = null;
+      selectedZoneId = null;
+      selectedQueueId = null;
+      selectedPathId = null;
     } else if (tool === "drawQueue") {
       selectedBarrierId = null;
       selectedZoneId = null;
@@ -2061,7 +2235,10 @@
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
       drawBarrier: "Drag on the map to paint barrier tiles (2ft each). Release and drag again to extend. Finish when done.",
-      drawPath: "Drag on the map to draw a path — a cyan line follows your cursor and tiles stamp on release.",
+      drawPath:
+        "Drag on the map to paint a path in walk order. Yellow arrows show flow. Use Save Flow to reverse direction.",
+      placeSpawn:
+        "Click a painted path to snap a token spawn. Set ticket class first — sim injects tokens here.",
       drawQueue:
         "Draw a queue line from the back of the line toward the scanner. Points snap to the 400×225 tile grid. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
@@ -2076,6 +2253,7 @@
     const toolPanelIds = {
       drawBarrier: "accessBarrierSection",
       drawPath: "accessPathSection",
+      placeSpawn: "accessSpawnSection",
       drawQueue: "accessQueueSection",
       fillZone: "accessZoneSection",
     };
@@ -2107,9 +2285,22 @@
         accessPaths
           .map((path) => {
             const width = path.width_tiles || path.widthTiles || 1;
-            return `<div class="card ${selectedPathId === path.id ? "selected" : ""}" onclick="selectAccessPath('${path.id}')"><h3>${escapeHtml(path.name)}</h3><p>${pathWidthLabel(width)} • ${(path.tiles || []).length} tiles</p><button class="danger" onclick="event.stopPropagation(); deleteAccessPath('${path.id}')">Delete</button></div>`;
+            const flow = (path.flow_direction || path.flowDirection || "forward") === "reverse" ? "← reverse" : "→ forward";
+            return `<div class="card ${selectedPathId === path.id ? "selected" : ""}" onclick="selectAccessPath('${path.id}')"><h3>${escapeHtml(path.name)}</h3><p>${pathWidthLabel(width)} • ${(path.tiles || []).length} tiles • ${flow}</p><button class="danger" onclick="event.stopPropagation(); deleteAccessPath('${path.id}')">Delete</button></div>`;
           })
           .join("") || '<p class="muted">No guest paths yet.</p>';
+    }
+
+    const spawnList = document.getElementById("accessSpawnList");
+    if (spawnList) {
+      spawnList.innerHTML =
+        accessSpawnPoints
+          .map((sp) => {
+            const path = accessPaths.find((p) => p.id === sp.path_id);
+            const pathName = path ? path.name : sp.path_id;
+            return `<div class="card ${selectedSpawnId === sp.id ? "selected" : ""}" onclick="selectSpawnPoint('${sp.id}')"><h3>${escapeHtml(sp.name)}</h3><p>${escapeHtml(pathName)} • ${(sp.ticket_class || "ga").toUpperCase()} • tile ${sp.tile_index + 1}</p><button class="danger" onclick="event.stopPropagation(); deleteSpawnPoint('${sp.id}')">Delete</button></div>`;
+          })
+          .join("") || '<p class="muted">No spawn points yet. Use Place Spawn on a path.</p>';
     }
 
     zoneList.innerHTML =
@@ -2325,11 +2516,14 @@
     if (path) {
       const widthEl = document.getElementById("accessPathWidth");
       const nameEl = document.getElementById("accessPathName");
+      const flowEl = document.getElementById("accessPathFlow");
       const width = path.width_tiles || path.widthTiles || 1;
       if (widthEl) widthEl.value = String(width);
       if (nameEl) nameEl.value = path.name;
+      if (flowEl) flowEl.value = path.flow_direction || path.flowDirection || "forward";
       pathBrushWidth = width;
     }
+    selectedSpawnId = null;
     syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
@@ -2337,6 +2531,60 @@
   }
 
   window.selectAccessPath = selectPath;
+
+  function selectSpawnPoint(id) {
+    accessTool = "select";
+    syncAccessToolbarButtons();
+    selectedSpawnId = id;
+    selectedPathId = null;
+    selectedBarrierId = null;
+    selectedZoneId = null;
+    selectedQueueId = null;
+    const sp = accessSpawnPoints.find((s) => s.id === id);
+    if (sp) {
+      const nameEl = document.getElementById("accessSpawnName");
+      const classEl = document.getElementById("accessSpawnClass");
+      if (nameEl) nameEl.value = sp.name;
+      if (classEl) classEl.value = sp.ticket_class || "ga";
+    }
+    syncAccessToolPanels();
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus("Selected spawn point.");
+  }
+
+  window.selectSpawnPoint = selectSpawnPoint;
+
+  window.deleteSpawnPoint = async function (id) {
+    if (!confirm("Delete this spawn point?")) return;
+    await api(`/events/${getDashEvent().id}/access-spawn-points/${id}`, { method: "DELETE" });
+    accessSpawnPoints = accessSpawnPoints.filter((s) => s.id !== id);
+    if (selectedSpawnId === id) selectedSpawnId = null;
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus("Deleted spawn point.");
+  };
+
+  window.saveSelectedPathFlow = async function () {
+    if (!selectedPathId || !getDashEvent()) {
+      setStatus("Select a path first.");
+      return;
+    }
+    const flow = document.getElementById("accessPathFlow")?.value || "forward";
+    try {
+      const updated = await api(`/events/${getDashEvent().id}/access-paths/${selectedPathId}`, {
+        method: "PUT",
+        body: JSON.stringify({ flow_direction: flow, updated_by: "dash_access" }),
+      });
+      const idx = accessPaths.findIndex((p) => p.id === selectedPathId);
+      if (idx >= 0) accessPaths[idx] = updated;
+      drawAccessLayers();
+      renderAccessLists();
+      setStatus(`Path flow set to ${flow === "reverse" ? "reverse" : "forward"}.`);
+    } catch (err) {
+      setStatus(`Save flow failed: ${err.message || err}`);
+    }
+  };
 
   window.selectAccessPortal = function (id) {
     portalHeadingPreview = null;
@@ -2429,13 +2677,16 @@
     }
     const name = document.getElementById("accessPathName")?.value?.trim() || "Path";
     const width_tiles = getPathBrushWidth();
+    const flow_direction = document.getElementById("accessPathFlow")?.value || "forward";
+    const orderedTiles = orderedPathTilesFromPaint(draftPathTiles, pathDraftVertices);
     try {
       const created = await api(`/events/${getDashEvent().id}/access-paths`, {
         method: "POST",
         body: JSON.stringify({
           name,
           width_tiles,
-          tiles: tilesToPayloadList(draftPathTiles),
+          tiles: orderedTiles.length ? orderedTiles : tilesToPayloadList(draftPathTiles),
+          flow_direction,
           updated_by: "dash_access",
         }),
       });
@@ -2773,6 +3024,38 @@
       return true;
     }
 
+    if (accessTool === "placeSpawn") {
+      try {
+        const snap = snapToPathTile(p.x, p.y);
+        if (!snap) {
+          setStatus("Click closer to a painted path tile.");
+          return true;
+        }
+        const name = document.getElementById("accessSpawnName")?.value?.trim() || "Spawn";
+        const ticket_class = document.getElementById("accessSpawnClass")?.value || "ga";
+        const created = await api(`/events/${getDashEvent().id}/access-spawn-points`, {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            path_id: snap.path_id,
+            tile_index: snap.tile_index,
+            map_x: snap.map_x,
+            map_y: snap.map_y,
+            ticket_class,
+            updated_by: "dash_access",
+          }),
+        });
+        accessSpawnPoints.push(created);
+        selectedSpawnId = created.id;
+        renderAccessLists();
+        drawAccessLayers();
+        setStatus(`Placed spawn on path tile ${snap.tile_index + 1}.`);
+      } catch (err) {
+        setStatus(err.message || String(err));
+      }
+      return true;
+    }
+
     if (accessTool === "workLocations") {
       try {
         const locationType =
@@ -2909,7 +3192,7 @@
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (e.button !== 0) return;
-          if (accessTool === "drawQueue" || accessTool === "fillZone" || accessTool === "workLocations") {
+          if (accessTool === "drawQueue" || accessTool === "fillZone" || accessTool === "workLocations" || accessTool === "placeSpawn") {
             e.preventDefault();
             return;
           }
@@ -2981,7 +3264,8 @@
             accessTool !== "drawPath" &&
             accessTool !== "drawQueue" &&
             accessTool !== "fillZone" &&
-            accessTool !== "workLocations"
+            accessTool !== "workLocations" &&
+            accessTool !== "placeSpawn"
           )
             return;
           if (accessTool === "drawBarrier" || accessTool === "drawPath") {
@@ -3031,6 +3315,7 @@
       accessLayerWorkLocs: "workLocations",
       accessLayerTileGrid: "tileGrid",
       accessLayerPaths: "paths",
+      accessLayerSpawnPoints: "spawnPoints",
       accessLayerQueues: "queues",
     };
     Object.entries(layerMap).forEach(([id, key]) => {
