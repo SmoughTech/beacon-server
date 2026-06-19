@@ -13,7 +13,7 @@ from access_control import normalize_path_flow_direction, normalize_zone_class
 from tile_grid import TILE_COLS, TILE_ROWS, grid_from_norm, norm_from_grid
 
 SIM_TICK_HZ = 30
-SCAN_TIME_TICKS = 90  # 3 s at 30 Hz — visible queue + scan feedback
+SCAN_TIME_TICKS = 45  # 1.5 s at 30 Hz — visible queue + scan feedback
 PATH_STEP_EVERY_TICKS = 6  # ~5 path tiles/sec
 QUEUE_STEP_EVERY_TICKS = 5  # ~6 queue tiles/sec
 DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))

@@ -50,7 +50,7 @@ def test_token_deleted_after_scan():
     assert len(engine.tokens) == 1
     token = engine.tokens[0]
     engine._start_scan(token)
-    assert engine.gate_flash.get("g1") == 90
+    assert engine.gate_flash.get("g1") == 45
     token.scan_timer = 1
     engine.advance_token(token)
     assert len(engine.tokens) == 0
