@@ -110,9 +110,20 @@
   }
 
   function refreshGateSnapGraphics() {
-    if (typeof drawAccessLayers === "function") drawAccessLayers();
     if (typeof decorateGateMarkers === "function") decorateGateMarkers();
-    if (typeof decorateGateDragHandles === "function") decorateGateDragHandles();
+    if (typeof drawAccessLayers === "function") drawAccessLayers();
+  }
+
+  function raiseGateMarkersAboveOverlay() {
+    const stage = getMapStage();
+    if (!stage) return;
+    stage.querySelectorAll(".marker.gate").forEach((el) => stage.appendChild(el));
+  }
+
+  function finishGateMarkerLayer() {
+    if (typeof currentTab === "undefined" || currentTab !== "access") return;
+    raiseGateMarkersAboveOverlay();
+    if (!gateDragState) decorateGateDragHandles();
   }
 
   function loadAccessLayerPrefs() {
@@ -2142,6 +2153,8 @@
             : null;
       drawPortalSnapLayers(svg, onlyId);
     }
+
+    finishGateMarkerLayer();
   }
 
   function drawPortalFlowArrow(svg, gate, pair, isSelected) {
@@ -3378,7 +3391,6 @@
       if (showsAccessMapLayers()) {
         if (currentTab === "access") {
           decorateGateMarkers();
-          decorateGateDragHandles();
           drawSimLocationMarkers();
         }
         drawAccessLayers();
@@ -3387,6 +3399,7 @@
         if (svg && stage) stage.appendChild(svg);
         const simSvg = document.getElementById("simAgentSvg");
         if (simSvg && stage) stage.appendChild(simSvg);
+        finishGateMarkerLayer();
       }
     };
 
@@ -3456,6 +3469,13 @@
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (e.button !== 0) return;
+          if (
+            e.target.closest?.(".marker.gate") ||
+            e.target.closest?.(".gateDragHandle") ||
+            e.target.closest?.(".gateSnapDot")
+          ) {
+            return;
+          }
           if (accessTool === "fillZone" || accessTool === "workLocations") {
             e.preventDefault();
             return;
