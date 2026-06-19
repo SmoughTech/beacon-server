@@ -24,7 +24,9 @@ from tile_grid import TILE_COLS, TILE_ROWS, grid_from_norm, norm_from_grid, tile
 SIM_TICK_HZ = 30
 SCAN_TIME_TICKS = 45  # 1.5 s
 OFF_PATH_STEP_COST = 10
+WALL_ADJACENCY_PENALTY = 8
 MAX_PATHFIND_EXPLORE = 8_000
+STUCK_REPLAN_TICKS = 20
 MAX_PATHFIND_JOBS_PER_TICK = 4
 MAX_AREA_CANDIDATES = 2_000
 MIN_SPAWN_DIST_FROM_GATE = 40
@@ -51,6 +53,10 @@ class SimAgent:
     goal: tuple[int, int] | None = None
     scan_timer: int = 0
     idle_tile: tuple[int, int] | None = None
+    prev_tx: int | None = None
+    prev_ty: int | None = None
+    stuck_ticks: int = 0
+    last_goal_dist: int = 0
 
 
 class SimResetRequest(BaseModel):
@@ -145,6 +151,13 @@ class CrowdSimEngine:
         self.blocked = [[wall[gy][gx] == 1 for gx in range(TILE_COLS)] for gy in range(TILE_ROWS)]
         self.surface = build_surface_grid(barriers, gates, zones, paths)
 
+        for gid in list(self.queues_by_gate.keys()):
+            normalized = self._normalize_queue_tiles(self.queues_by_gate[gid])
+            if normalized:
+                self.queues_by_gate[gid] = normalized
+            else:
+                self.queues_by_gate.pop(gid, None)
+
         self.layout_warnings: list[str] = []
         for gate in gates:
             gid = gate["id"]
@@ -210,7 +223,10 @@ class CrowdSimEngine:
                     break
         if best_tail == head:
             return [head]
-        return _bresenham_tiles(best_tail[0], best_tail[1], head[0], head[1])
+        route = self.find_path(best_tail, head, agent_id=0)
+        if route:
+            return [best_tail, *route]
+        return [best_tail, head]
 
     def _collect_spawn_tiles(self) -> list[tuple[int, int]]:
         gate_positions = self._gate_positions()
@@ -309,27 +325,96 @@ class CrowdSimEngine:
         holder = occ.get((tx, ty))
         return holder is None or holder == agent_id
 
-    def step_cost(self, tx: int, ty: int) -> int:
-        if self.surface[ty][tx] == SURFACE_PATH:
-            return 1
-        return OFF_PATH_STEP_COST
+    def adjacent_wall_count(self, tx: int, ty: int) -> int:
+        count = 0
+        for dx, dy in DIRS:
+            if not self.passable(tx + dx, ty + dy):
+                count += 1
+        return count
 
-    def nearest_passable(self, tx: int, ty: int, max_radius: int = 16) -> tuple[int, int] | None:
-        if self.passable(tx, ty):
-            return tx, ty
-        for radius in range(1, max_radius + 1):
+    def _normalize_queue_tiles(self, tiles: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        if not tiles:
+            return []
+        out: list[tuple[int, int]] = []
+        for tx, ty in tiles:
+            if not self.passable(tx, ty):
+                alt = self.nearest_passable(tx, ty, max_radius=6, avoid_walls=True)
+                if not alt:
+                    continue
+                tx, ty = alt
+            if out and (tx, ty) == out[-1]:
+                continue
+            out.append((tx, ty))
+        return out
+
+    def step_cost(self, tx: int, ty: int) -> int:
+        base = 1 if self.surface[ty][tx] == SURFACE_PATH else OFF_PATH_STEP_COST
+        return base + self.adjacent_wall_count(tx, ty) * WALL_ADJACENCY_PENALTY
+
+    def nearest_passable(
+        self,
+        tx: int,
+        ty: int,
+        max_radius: int = 16,
+        *,
+        avoid_walls: bool = False,
+    ) -> tuple[int, int] | None:
+        for radius in range(0, max_radius + 1):
+            ring_best: tuple[int, int] | None = None
+            ring_score = 10**9
             for dx in range(-radius, radius + 1):
                 for dy in range(-radius, radius + 1):
-                    if max(abs(dx), abs(dy)) != radius:
+                    if radius > 0 and max(abs(dx), abs(dy)) != radius:
                         continue
                     nx, ny = tx + dx, ty + dy
-                    if self.passable(nx, ny):
-                        return nx, ny
+                    if not self.passable(nx, ny):
+                        continue
+                    score = radius * 100
+                    if avoid_walls:
+                        score += self.adjacent_wall_count(nx, ny) * 20
+                    if self.surface[ny][nx] != SURFACE_PATH:
+                        score += 15
+                    if score < ring_score:
+                        ring_score = score
+                        ring_best = (nx, ny)
+            if ring_best:
+                return ring_best
         return None
 
     def resolve_goal(self, goal: tuple[int, int]) -> tuple[int, int]:
-        resolved = self.nearest_passable(goal[0], goal[1])
+        resolved = self.nearest_passable(goal[0], goal[1], avoid_walls=True)
         return resolved if resolved else goal
+
+    def resolve_goal_reachable(
+        self,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        agent_id: int,
+    ) -> tuple[int, int]:
+        resolved = self.resolve_goal(goal)
+        if start == resolved:
+            return resolved
+        if self.find_path(start, resolved, agent_id):
+            return resolved
+        best: tuple[int, int] | None = None
+        best_len = 10**9
+        for radius in range(0, 25):
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if radius > 0 and max(abs(dx), abs(dy)) != radius:
+                        continue
+                    nx, ny = resolved[0] + dx, resolved[1] + dy
+                    if not self.passable(nx, ny):
+                        continue
+                    if self.adjacent_wall_count(nx, ny) >= 3:
+                        continue
+                    path = self.find_path(start, (nx, ny), agent_id)
+                    if path and len(path) < best_len:
+                        best_len = len(path)
+                        best = (nx, ny)
+            if best:
+                return best
+        return resolved
 
     def greedy_step_toward(
         self,
@@ -341,19 +426,28 @@ class CrowdSimEngine:
         pos = (agent.tx, agent.ty)
         if pos == agent.goal:
             return False
-        best: tuple[int, int] | None = None
-        best_score = 10**9
+        prev = (
+            (agent.prev_tx, agent.prev_ty)
+            if agent.prev_tx is not None and agent.prev_ty is not None
+            else None
+        )
+        ranked: list[tuple[int, tuple[int, int]]] = []
         for dx, dy in DIRS:
             nx, ny = agent.tx + dx, agent.ty + dy
             if not self.passable(nx, ny):
                 continue
             if not self.tile_free(nx, ny, occ, agent.id):
                 continue
-            score = _manhattan((nx, ny), agent.goal) + self.step_cost(nx, ny)
-            if score < best_score:
-                best_score = score
-                best = (nx, ny)
-        if best is None or best == pos:
+            step = (nx, ny)
+            score = _manhattan(step, agent.goal) + self.step_cost(nx, ny)
+            ranked.append((score, step))
+        if not ranked:
+            return False
+        ranked.sort(key=lambda item: item[0])
+        best = ranked[0][1]
+        if prev and best == prev and len(ranked) > 1:
+            best = ranked[1][1]
+        if best == pos:
             return False
         agent.tx, agent.ty = best
         return True
@@ -367,6 +461,7 @@ class CrowdSimEngine:
         goal = self.resolve_goal(goal)
         if start == goal:
             return []
+        start_dist = _manhattan(start, goal)
         occ = self.occupancy(except_id=agent_id)
         came_from: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
         cost_so_far: dict[tuple[int, int], int] = {start: 0}
@@ -405,7 +500,26 @@ class CrowdSimEngine:
                 heapq.heappush(heap, (priority, nx, ny))
                 came_from[nxt] = current
 
-        target = goal if goal in came_from else closest
+        if goal in came_from:
+            target = goal
+        elif closest_dist < start_dist:
+            target = closest
+            if self.adjacent_wall_count(closest[0], closest[1]) >= 2:
+                path_cells = [
+                    cell
+                    for cell in cost_so_far
+                    if cell != start and self.surface[cell[1]][cell[0]] == SURFACE_PATH
+                ]
+                if path_cells:
+                    target = min(
+                        path_cells,
+                        key=lambda c: (
+                            _manhattan(c, goal),
+                            self.adjacent_wall_count(c[0], c[1]),
+                        ),
+                    )
+        else:
+            return []
         if target == start:
             return []
         path: list[tuple[int, int]] = []
@@ -437,17 +551,33 @@ class CrowdSimEngine:
         return warnings
 
     def pick_gate(self, ticket_class: str, target_zone_id: str | None, from_tx: int, from_ty: int) -> dict[str, Any] | None:
-        best: tuple[int, dict[str, Any]] | None = None
+        best: tuple[tuple[int, int], dict[str, Any]] | None = None
         start = (from_tx, from_ty)
+        for gate in self.gates:
+            if not _gate_admits(gate, ticket_class, target_zone_id):
+                continue
+            gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+            raw_goal = self.queue_goal_tile(gate["id"], gx, gy)
+            goal = self.resolve_goal(raw_goal)
+            path_len = len(self.find_path(start, goal, agent_id=0))
+            if path_len == 0 and start != goal:
+                continue
+            metric = (path_len, _manhattan(start, goal))
+            if best is None or metric < best[0]:
+                best = (metric, gate)
+        if best:
+            return best[1]
+        # Fallback: straight-line nearest if path routing failed for all gates.
+        fallback: tuple[int, dict[str, Any]] | None = None
         for gate in self.gates:
             if not _gate_admits(gate, ticket_class, target_zone_id):
                 continue
             gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
             goal = self.queue_goal_tile(gate["id"], gx, gy)
             dist = _manhattan(start, goal)
-            if best is None or dist < best[0]:
-                best = (dist, gate)
-        return best[1] if best else None
+            if fallback is None or dist < fallback[0]:
+                fallback = (dist, gate)
+        return fallback[1] if fallback else None
 
     def queue_goal_tile(self, gate_id: str, gx: int, gy: int) -> tuple[int, int]:
         tiles = self.queues_by_gate.get(gate_id) or []
@@ -484,7 +614,8 @@ class CrowdSimEngine:
         goal = None
         if gate:
             gx, gy = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
-            goal = self.resolve_goal(self.queue_goal_tile(gate_id, gx, gy))
+            raw_goal = self.queue_goal_tile(gate_id, gx, gy)
+            goal = self.resolve_goal_reachable((tx, ty), raw_goal, self.next_agent_id)
         elif zone:
             goal = self._fallback_zone_goal(zone["id"], tx, ty)
 
@@ -496,6 +627,7 @@ class CrowdSimEngine:
             target_zone_id=zone["id"],
             target_gate_id=gate_id,
             goal=goal,
+            last_goal_dist=_manhattan((tx, ty), goal) if goal else 0,
         )
         # Route is computed lazily on first tick — keeps /sim/reset fast.
         self.agents.append(agent)
@@ -560,6 +692,27 @@ class CrowdSimEngine:
             return tiles[-1]
         return tiles[best_i + 1]
 
+    def _track_motion(self, agent: SimAgent) -> None:
+        pos = (agent.tx, agent.ty)
+        if agent.prev_tx is not None and agent.prev_ty is not None and (agent.prev_tx, agent.prev_ty) == pos:
+            agent.stuck_ticks += 1
+        elif agent.goal:
+            dist = _manhattan(pos, agent.goal)
+            if dist >= agent.last_goal_dist:
+                agent.stuck_ticks += 1
+            else:
+                agent.stuck_ticks = max(0, agent.stuck_ticks - 1)
+            agent.last_goal_dist = dist
+        agent.prev_tx, agent.prev_ty = agent.tx, agent.ty
+
+    def _unstick_agent(self, agent: SimAgent) -> None:
+        if not agent.goal:
+            return
+        start = (agent.tx, agent.ty)
+        agent.goal = self.resolve_goal_reachable(start, agent.goal, agent.id)
+        agent.route = self.find_path(start, agent.goal, agent.id)
+        agent.stuck_ticks = 0
+
     def try_move(self, agent: SimAgent, occ: dict[tuple[int, int], int]) -> None:
         if agent.state == AgentState.IDLE:
             return
@@ -570,8 +723,9 @@ class CrowdSimEngine:
                 area = self.pick_area_tile(agent.target_zone_id or "", agent.id)
                 if area:
                     agent.idle_tile = area
-                    agent.goal = area
-                    agent.route = self.find_path((agent.tx, agent.ty), area, agent.id)
+                    agent.goal = self.resolve_goal_reachable((agent.tx, agent.ty), area, agent.id)
+                    agent.last_goal_dist = _manhattan((agent.tx, agent.ty), agent.goal)
+                    agent.route = self.find_path((agent.tx, agent.ty), agent.goal, agent.id)
                     agent.state = AgentState.WALKING
                 else:
                     agent.state = AgentState.IDLE
@@ -610,15 +764,24 @@ class CrowdSimEngine:
                 if self.at_queue_tail(agent) and agent.target_gate_id:
                     agent.state = AgentState.QUEUING
                     agent.route = []
-                return
+            else:
+                agent.route = self.find_path((agent.tx, agent.ty), agent.goal or (agent.tx, agent.ty), agent.id)
+            self._track_motion(agent)
+            return
 
         if agent.goal and (agent.tx, agent.ty) != agent.goal:
             if self.greedy_step_toward(agent, occ):
                 agent.route = []
+                self._track_motion(agent)
                 return
 
         if agent.target_gate_id and self.at_queue_tail(agent):
             agent.state = AgentState.QUEUING
+
+        if agent.state == AgentState.WALKING and agent.stuck_ticks >= STUCK_REPLAN_TICKS:
+            self._unstick_agent(agent)
+
+        self._track_motion(agent)
 
     def tick_once(self) -> None:
         self.tick += 1
