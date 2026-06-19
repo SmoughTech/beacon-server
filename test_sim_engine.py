@@ -132,6 +132,68 @@ def test_queue_scans_at_farthest_point_from_tail():
     assert _manhattan(scan_tile, tiles[0]) >= _manhattan(tiles[-1], tiles[0])
 
 
+def test_no_scan_without_queue_line():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.5, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[10, 10]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, [])
+    token = Token(
+        id=1,
+        ticket_class="ga",
+        path_id="p1",
+        path_index=0,
+        tx=10,
+        ty=10,
+        stage=TokenStage.IN_QUEUE,
+        target_gate_id="g1",
+    )
+    engine.tokens = [token]
+    engine._advance_queue(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.scan_timer == 0
+
+
+def test_token_walks_queue_tiles_before_scan():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[10, 10], [11, 10], [12, 10]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": 12 / 400, "y": 10 / 225},
+                {"x": 13 / 400, "y": 10 / 225},
+                {"x": 14 / 400, "y": 10 / 225},
+                {"x": 15 / 400, "y": 10 / 225},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    token = Token(
+        id=1,
+        ticket_class="ga",
+        path_id="p1",
+        path_index=2,
+        tx=12,
+        ty=10,
+        target_gate_id="g1",
+    )
+    engine.tokens = [token]
+    engine._try_join_queue_from_path(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.queue_index == 0
+    for _ in range(3):
+        token.step_cooldown = 0
+        engine._advance_queue(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.queue_index == 3
+    token.step_cooldown = 0
+    engine._advance_queue(token)
+    assert token.stage == TokenStage.SCANNING
+
+
 def test_spawn_requires_spawn_point():
     engine = TokenFlowEngine("evt", [], [], [], [], [])
     assert engine.spawn_one("ga") is False

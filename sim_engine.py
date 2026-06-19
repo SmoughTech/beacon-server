@@ -214,6 +214,8 @@ class TokenFlowEngine:
             warnings.append("No spawn points — use Place Spawn on a painted path.")
         elif not self.paths_by_id:
             warnings.append("No paths — draw paths before placing spawn points.")
+        if self.gates and not self.queues_by_gate:
+            warnings.append("No queue lines — draw queues from path entrance to each scanner.")
         return warnings
 
     def zone_for_class(self, ticket_class: str) -> dict[str, Any] | None:
@@ -302,6 +304,8 @@ class TokenFlowEngine:
             if dist > best_d:
                 best_d = dist
                 best_i = i
+        if best_i == 0:
+            best_i = len(tiles) - 1
         return best_i
 
     def queue_scan_tile(self, gate_id: str) -> tuple[int, int] | None:
@@ -387,12 +391,43 @@ class TokenFlowEngine:
                 return True
         return False
 
+    def _is_adjacent(self, a: tuple[int, int], b: tuple[int, int]) -> bool:
+        return _manhattan(a, b) == 1
+
     def enter_queue(self, token: Token) -> None:
         if token.stage == TokenStage.IN_QUEUE:
             return
         token.stage = TokenStage.IN_QUEUE
         token.queue_index = None
         token.step_cooldown = 0
+
+    def _join_queue_polyline(self, token: Token, gate_id: str) -> bool:
+        tiles = self.queue_tiles(gate_id)
+        if not tiles:
+            return False
+        pos = (token.tx, token.ty)
+        scan_idx = self.queue_scan_index(gate_id)
+        for i, tile in enumerate(tiles):
+            if tile == pos and i <= scan_idx:
+                token.queue_index = i
+                return True
+        tail = tiles[0]
+        if pos == tail:
+            token.queue_index = 0
+            return True
+        if self._is_adjacent(pos, tail) and not self.queue_tile_taken(tail[0], tail[1], token.id):
+            token.tx, token.ty = tail
+            token.queue_index = 0
+            token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
+            return True
+        return False
+
+    def _try_join_queue_from_path(self, token: Token) -> bool:
+        gate_id = token.target_gate_id
+        if not gate_id or not self.queue_tiles(gate_id):
+            return False
+        self.enter_queue(token)
+        return self._join_queue_polyline(token, gate_id)
 
     def _start_scan(self, token: Token) -> None:
         token.stage = TokenStage.SCANNING
@@ -424,36 +459,21 @@ class TokenFlowEngine:
 
         gate_id = token.target_gate_id
         if not gate_id:
-            self._start_scan(token)
             return
 
         tiles = self.queue_tiles(gate_id)
-        scan_tile = self.queue_scan_tile(gate_id)
+        if not tiles:
+            return
+
+        scan_idx = self.queue_scan_index(gate_id)
 
         if self.on_queue_head(token):
             self._start_scan(token)
             return
 
-        def occupied(nx: int, ny: int) -> bool:
-            return self.queue_tile_taken(nx, ny, token.id)
-
-        if not tiles:
-            if scan_tile and self.greedy_step_toward(token, scan_tile, occupied):
-                token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
-            elif scan_tile and (token.tx, token.ty) == scan_tile:
-                self._start_scan(token)
-            return
-
-        tail = tiles[0]
-        scan_idx = self.queue_scan_index(gate_id)
-
         if token.queue_index is None:
-            if (token.tx, token.ty) == tail:
-                if not self.queue_index_taken(gate_id, 0, token.id):
-                    token.queue_index = 0
+            if self._join_queue_polyline(token, gate_id):
                 return
-            if self.greedy_step_toward(token, tail, occupied):
-                token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
             return
 
         if token.queue_index >= scan_idx:
@@ -490,15 +510,20 @@ class TokenFlowEngine:
 
         track = self.paths_by_id.get(token.path_id)
         if not track:
-            self.enter_queue(token)
+            if self._try_join_queue_from_path(token):
+                return
             return
 
         if track.at_downstream_end(token.path_index):
+            if self._try_join_queue_from_path(token):
+                return
             self.enter_queue(token)
             return
 
         nxt_idx = track.next_index(token.path_index)
         if nxt_idx is None:
+            if self._try_join_queue_from_path(token):
+                return
             self.enter_queue(token)
             return
         if self.path_tile_taken(token.path_id, nxt_idx, token.id):
@@ -668,6 +693,24 @@ def register_sim_engine(
         for _ in range(payload.steps):
             engine.tick_once()
         return engine.to_dict()
+
+    @router.post("/events/{event_id}/sim/stop")
+    def sim_stop(event_id: str):
+        try:
+            get_event_config(event_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="Event not found") from exc
+        _engines.pop(event_id, None)
+        return {
+            "event_id": event_id,
+            "stopped": True,
+            "tick": 0,
+            "stats": {"spawned": 0, "scanned": 0, "active": 0},
+            "agents": [],
+            "spawn_remaining": 0,
+            "warnings": [],
+            "scanner_activity": [],
+        }
 
     @router.get("/events/{event_id}/sim/state")
     def sim_state(event_id: str):

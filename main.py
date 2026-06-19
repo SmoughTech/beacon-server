@@ -1182,6 +1182,7 @@ DASH_HTML = r'''
           <button class="primary" onclick="simReset()">Reset &amp; Spawn</button>
           <button id="simPlayBtn" class="good" onclick="simTogglePlay()">Play</button>
           <button class="ghost" onclick="simReloadLayout()">Reload layout</button>
+          <button onclick="simCancel()">Stop &amp; Clear</button>
         </div>
         <div id="simStats" class="small muted" style="margin-top:10px">Not running.</div>
       </section>
@@ -1224,7 +1225,7 @@ DASH_HTML = r'''
         <div id="accessSectionPaths" class="accessSection hidden">
           <h3>Paths</h3>
           <div id="accessPathSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Drag to paint corridors. Release near a queue tail (yellow dot) to snap the path entrance. Set flow direction after saving.</p>
+            <p class="small" style="margin:0 0 8px">Drag to paint corridors. Release on a queue tail (yellow dot) to snap the path entrance. Draw a queue line for each scanner — guests follow it like a path before scanning.</p>
             <div class="row">
               <div><label>Path name</label><input id="accessPathName" placeholder="Main walkway" /></div>
               <div><label>Brush width</label><select id="accessPathWidth"><option value="1">1 tile (2ft)</option><option value="2">2 tiles (4ft)</option><option value="4">4 tiles (8ft)</option></select></div>
@@ -1533,7 +1534,7 @@ async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))retur
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
 <script src="/static/dash/access-control.js?v=3.17.1"></script>
-<script src="/static/dash/crowd-sim.js?v=1.6.0"></script>
+<script src="/static/dash/crowd-sim.js?v=1.7.0"></script>
 </body>
 </html>
 '''

@@ -274,6 +274,35 @@
     if (btn) btn.textContent = "Play";
   }
 
+  function simClearLocal() {
+    simStop();
+    simAgents = [];
+    simStats = { spawned: 0, scanned: 0, active: 0 };
+    simWarnings = [];
+    simSpawnRemaining = 0;
+    simTick = 0;
+    simScannerFlash = {};
+    clearSimSvg();
+    updateScannerFlash();
+    updateSimStats();
+  }
+
+  async function simCancel() {
+    const eventId = getEventId();
+    if (!eventId) {
+      setStatus("Select an event first.");
+      return;
+    }
+    simClearLocal();
+    try {
+      const data = await api(`/events/${eventId}/sim/stop`, { method: "POST" });
+      applySimState(data);
+      setStatus("Sim stopped and cleared.");
+    } catch (e) {
+      setStatus("Sim stop failed: " + e.message);
+    }
+  }
+
   function simStart() {
     if (!simAgents.length && !simSpawnRemaining && !(simStats.spawned || 0)) {
       setStatus("Click Reset & Spawn first.");
@@ -332,6 +361,7 @@
   }
 
   window.simReset = simReset;
+  window.simCancel = simCancel;
   window.simReloadLayout = simReloadLayout;
   window.simTogglePlay = simTogglePlay;
   window.loadSimPanel = loadSimPanel;
