@@ -194,6 +194,41 @@ def test_token_walks_queue_tiles_before_scan():
     assert token.stage == TokenStage.SCANNING
 
 
+def test_handoff_at_path_junction_before_path_end():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    path_tiles = [(5, i) for i in range(10, 16)] + [(i, 15) for i in range(6, 16)]
+    paths = [{"id": "p1", "tiles": path_tiles, "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": 5 / 400, "y": 15 / 225},
+                {"x": 10 / 400, "y": 15 / 225},
+                {"x": 15 / 400, "y": 15 / 225},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    junction_pi = engine._path_junction_index(PathTrack.from_dict(paths[0]), "g1")
+    assert junction_pi is not None
+    assert junction_pi < len(path_tiles) - 1
+    token = Token(
+        id=1,
+        ticket_class="ga",
+        path_id="p1",
+        path_index=junction_pi,
+        tx=5,
+        ty=15,
+        target_gate_id="g1",
+    )
+    engine.tokens = [token]
+    assert engine._try_transition_path_to_queue(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.queue_index == 0
+
+
 def test_multiple_tokens_advance_through_queue():
     zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
     gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]

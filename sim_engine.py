@@ -466,6 +466,28 @@ class TokenFlowEngine:
         token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
         return True
 
+    def _queue_index_near(self, gate_id: str, tx: int, ty: int, max_dist: int = 2) -> int | None:
+        tiles = self.queue_tiles(gate_id)
+        best_i: int | None = None
+        best_d = max_dist + 1
+        for i, (qx, qy) in enumerate(tiles):
+            d = _manhattan((tx, ty), (qx, qy))
+            if d <= max_dist and d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
+
+    def _path_junction_index(self, track: PathTrack, gate_id: str) -> int | None:
+        """First path tile index that meets the queue tail (T-junction)."""
+        tiles = self.queue_tiles(gate_id)
+        if not tiles or not track.tiles:
+            return None
+        tail = tiles[0]
+        for i, pt in enumerate(track.tiles):
+            if pt == tail or _manhattan(pt, tail) <= 3:
+                return i
+        return None
+
     def _try_transition_path_to_queue(self, token: Token) -> bool:
         gate_id = self._resolve_gate_for_queue(token)
         if not gate_id:
@@ -478,24 +500,28 @@ class TokenFlowEngine:
         scan_idx = self.queue_scan_index(gate_id)
         track = self.paths_by_id.get(token.path_id)
 
-        for i, tile in enumerate(tiles):
-            if tile == pos and i <= scan_idx:
-                return self._claim_queue_index(token, gate_id, i)
+        q_idx = self._queue_index_near(gate_id, pos[0], pos[1], max_dist=2)
+        if q_idx is not None and q_idx <= scan_idx:
+            return self._claim_queue_index(token, gate_id, q_idx)
 
         if track:
+            junction_pi = self._path_junction_index(track, gate_id)
+            if junction_pi is not None and token.path_index >= junction_pi:
+                return self._claim_queue_index(token, gate_id, 0, snap_to=tiles[0])
+
             nxt_idx = track.next_index(token.path_index)
             if nxt_idx is not None:
                 nxt_tile = track.tile_at(nxt_idx)
-                if nxt_tile in tiles:
-                    q_idx = tiles.index(nxt_tile)
-                    if q_idx <= scan_idx:
-                        if self.queue_index_taken(gate_id, q_idx, token.id):
+                if nxt_tile:
+                    nxt_q = self._queue_index_near(gate_id, nxt_tile[0], nxt_tile[1], max_dist=2)
+                    if nxt_q is not None and nxt_q <= scan_idx:
+                        if self.queue_index_taken(gate_id, nxt_q, token.id):
                             return True
                         token.path_index = nxt_idx
-                        return self._claim_queue_index(token, gate_id, q_idx)
+                        return self._claim_queue_index(token, gate_id, nxt_q)
 
         at_path_end = bool(track and track.at_downstream_end(token.path_index))
-        if at_path_end or _manhattan(pos, tiles[0]) <= 3:
+        if at_path_end or _manhattan(pos, tiles[0]) <= 6:
             return self._claim_queue_index(token, gate_id, 0, snap_to=tiles[0])
 
         return False
