@@ -54,6 +54,9 @@
   let pathDragState = null;
   let pathDragPreviewTiles = new Set();
   let pathDraftVertices = [];
+  let queueDragState = null;
+  const QUEUE_ENTRANCE_SNAP_RADIUS = 0.028;
+  const QUEUE_PORTAL_SNAP_RADIUS = 0.024;
   let pathBrushWidth = 1;
   let draftQueuePoints = [];
   let selectedBarrierId = null;
@@ -364,7 +367,10 @@
 
     const mapWrap = document.getElementById("mapWrap");
     if (mapWrap) {
-      mapWrap.classList.toggle("accessPaintCursor", accessTool === "drawPath" || accessTool === "drawBarrier" || accessTool === "placeSpawn");
+      mapWrap.classList.toggle(
+        "accessPaintCursor",
+        accessTool === "drawPath" || accessTool === "drawBarrier" || accessTool === "drawQueue" || accessTool === "placeSpawn"
+      );
     }
   }
 
@@ -524,34 +530,48 @@
   }
 
   function beginPathDrag(p) {
-    const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
+    const anchor = pathDragAnchor(p);
     const width = getPathBrushWidth();
     pathBrushWidth = width;
-    pathDragState = { startTx: tx, startTy: ty, width, curX: p.x, curY: p.y };
+    pathDragState = {
+      startTx: anchor.tx,
+      startTy: anchor.ty,
+      width,
+      curX: p.x,
+      curY: p.y,
+    };
     pathDragPreviewTiles = new Set();
-    addBrushTilesAlongLine(tx, ty, tx, ty, width, pathDragPreviewTiles);
+    addBrushTilesAlongLine(anchor.tx, anchor.ty, anchor.tx, anchor.ty, width, pathDragPreviewTiles);
     bindPathDragListeners();
     drawAccessLayers();
+    if (anchor.snapped) {
+      setStatus(`Path snapped to ${anchor.label}. Drag toward destination; release to stamp tiles.`);
+    }
   }
 
   function updatePathDrag(p) {
     if (!pathDragState) return;
     pathDragState.curX = p.x;
     pathDragState.curY = p.y;
-    const { gx: tx, gy: ty } = gridFromNorm(p.x, p.y);
+    const anchor = pathDragAnchor(p);
     pathDragPreviewTiles = new Set();
-    addBrushTilesAlongLine(pathDragState.startTx, pathDragState.startTy, tx, ty, pathDragState.width, pathDragPreviewTiles);
+    addBrushTilesAlongLine(
+      pathDragState.startTx,
+      pathDragState.startTy,
+      anchor.tx,
+      anchor.ty,
+      pathDragState.width,
+      pathDragPreviewTiles
+    );
     drawAccessLayers();
   }
 
   function endPathDrag() {
     if (!pathDragState) return;
     pathDragPreviewTiles.forEach((k) => draftPathTiles.add(k));
-    const end = normFromGrid(
-      gridFromNorm(pathDragState.curX, pathDragState.curY).gx,
-      gridFromNorm(pathDragState.curX, pathDragState.curY).gy
-    );
+    const endAnchor = pathDragAnchor({ x: pathDragState.curX, y: pathDragState.curY });
     const start = normFromGrid(pathDragState.startTx, pathDragState.startTy);
+    const end = normFromGrid(endAnchor.tx, endAnchor.ty);
     pathDraftVertices.push(start);
     pathDraftVertices.push(end);
     const count = draftPathTiles.size;
@@ -559,16 +579,71 @@
     pathDragPreviewTiles = new Set();
     unbindPathDragListeners();
     drawAccessLayers();
-    setStatus(`${count} path tile${count === 1 ? "" : "s"} painted (${pathWidthLabel(pathBrushWidth)}). Drag again or Finish Path.`);
+    const snapNote = endAnchor.snapped ? " (snapped to queue entrance)" : "";
+    setStatus(`${count} path tile${count === 1 ? "" : "s"} painted${snapNote}. Drag again or Finish Path.`);
+  }
+
+  function appendQueueSegment(x0, y0, x1, y1) {
+    const a = vertexFromNorm(x0, y0);
+    const b = vertexFromNorm(x1, y1);
+    if (!draftQueuePoints.length) {
+      draftQueuePoints.push(normFromVertex(a.vx, a.vy));
+    }
+    vertexLineBetween(a.vx, a.vy, b.vx, b.vy)
+      .slice(1)
+      .forEach(([vx, vy]) => {
+        draftQueuePoints.push(normFromVertex(vx, vy));
+      });
+  }
+
+  function beginQueueDrag(p) {
+    const gates = getDashGates() || [];
+    if (!gates.length) {
+      setStatus("Place a scanner first, then drag the queue line toward it.");
+      return;
+    }
+    let start;
+    if (draftQueuePoints.length === 0) {
+      start = snapQueuePoint(p);
+    } else {
+      start = draftQueuePoints[draftQueuePoints.length - 1];
+    }
+    queueDragState = { startX: start.x, startY: start.y, curX: p.x, curY: p.y };
+    bindPathDragListeners();
+    drawAccessLayers();
+  }
+
+  function updateQueueDrag(p) {
+    if (!queueDragState) return;
+    queueDragState.curX = p.x;
+    queueDragState.curY = p.y;
+    drawAccessLayers();
+  }
+
+  function endQueueDrag() {
+    if (!queueDragState) return;
+    const end = snapQueueEndpoint({ x: queueDragState.curX, y: queueDragState.curY });
+    appendQueueSegment(queueDragState.startX, queueDragState.startY, end.x, end.y);
+    const count = draftQueuePoints.length;
+    queueDragState = null;
+    unbindPathDragListeners();
+    drawAccessLayers();
+    if (end.snapped) {
+      setStatus(`Queue line: ${count} points — snapped to ${end.gateName || "scanner"}. Drag again or Finish Queue.`);
+    } else {
+      setStatus(`Queue line: ${count} points. Drag toward scanner; release near portal to snap.`);
+    }
   }
 
   function onDocumentPathDragMove(e) {
-    if (!pathDragState) return;
-    updatePathDrag(mapXY(e));
+    const p = mapXY(e);
+    if (pathDragState) updatePathDrag(p);
+    else if (queueDragState) updateQueueDrag(p);
   }
 
   function onDocumentPathDragEnd() {
     if (pathDragState) endPathDrag();
+    else if (queueDragState) endQueueDrag();
   }
 
   function bindPathDragListeners() {
@@ -580,6 +655,7 @@
 
   function unbindPathDragListeners() {
     if (!document.body.dataset.pathDragBound) return;
+    if (pathDragState || queueDragState) return;
     delete document.body.dataset.pathDragBound;
     document.removeEventListener("mousemove", onDocumentPathDragMove, true);
     document.removeEventListener("mouseup", onDocumentPathDragEnd, true);
@@ -640,6 +716,68 @@
       }
     }
     return ordered;
+  }
+
+  function snapToQueueEntrance(p) {
+    const candidates = [];
+    accessQueues.forEach((queue) => {
+      const tail = queue.points?.[0];
+      if (tail) candidates.push({ point: tail, label: "queue tail" });
+    });
+    if (draftQueuePoints.length >= 1) {
+      candidates.push({ point: draftQueuePoints[0], label: "draft queue tail" });
+    }
+    let best = null;
+    let bestDist = QUEUE_ENTRANCE_SNAP_RADIUS;
+    for (const item of candidates) {
+      const d = Math.hypot(p.x - item.point.x, p.y - item.point.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = item;
+      }
+    }
+    return best;
+  }
+
+  function pathDragAnchor(p) {
+    const entrance = snapToQueueEntrance(p);
+    if (entrance) {
+      const g = gridFromNorm(entrance.point.x, entrance.point.y);
+      return { tx: g.gx, ty: g.gy, snapped: true, label: entrance.label };
+    }
+    const g = gridFromNorm(p.x, p.y);
+    return { tx: g.gx, ty: g.gy, snapped: false };
+  }
+
+  function snapQueueEndpoint(p) {
+    const gates = getDashGates() || [];
+    const gateSelect = document.getElementById("accessQueueGate");
+    const selectedId = gateSelect?.value;
+    const ordered = selectedId
+      ? [...gates.filter((g) => g.id === selectedId), ...gates.filter((g) => g.id !== selectedId)]
+      : gates;
+
+    for (const gate of ordered) {
+      const mx = gate.map_x ?? gate.mapX;
+      const my = gate.map_y ?? gate.mapY;
+      if (mx == null || my == null) continue;
+      const d = Math.hypot(p.x - mx, p.y - my);
+      if (d < QUEUE_PORTAL_SNAP_RADIUS) {
+        if (gateSelect && !selectedId) gateSelect.value = gate.id;
+        return { ...snapQueuePoint({ x: mx, y: my }), snapped: true, gateName: gate.name || gate.id };
+      }
+    }
+
+    const portalSnap = snapAccessPoint(p, ordered);
+    if (portalSnap.snapped) {
+      if (portalSnap.gateId && gateSelect) gateSelect.value = portalSnap.gateId;
+      return {
+        ...snapQueuePoint(portalSnap),
+        snapped: true,
+        gateName: portalSnap.gateName,
+      };
+    }
+    return { ...snapQueuePoint(p), snapped: false };
   }
 
   function snapToPathTile(normX, normY) {
@@ -1365,6 +1503,53 @@
     return Math.max(5, Number(widthTiles || 1) * 4);
   }
 
+  function drawQueueLiveStroke(svg, state, committed) {
+    if (!state && !(committed && committed.length >= 1)) return;
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.style.pointerEvents = "none";
+
+    if (committed && committed.length >= 1) {
+      const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      pl.setAttribute("fill", "none");
+      pl.setAttribute(
+        "points",
+        committed.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
+      );
+      pl.setAttribute("stroke", "#26c6da");
+      pl.setAttribute("stroke-width", "5");
+      pl.setAttribute("stroke-linecap", "round");
+      pl.setAttribute("stroke-linejoin", "round");
+      pl.setAttribute("opacity", "0.9");
+      g.appendChild(pl);
+    }
+
+    if (state) {
+      const endSnap = snapQueueEndpoint({ x: state.curX, y: state.curY });
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(state.startX * SVG_W));
+      line.setAttribute("y1", String(state.startY * SVG_H));
+      line.setAttribute("x2", String(endSnap.x * SVG_W));
+      line.setAttribute("y2", String(endSnap.y * SVG_H));
+      line.setAttribute("stroke", endSnap.snapped ? "#ffe082" : "#00e5ff");
+      line.setAttribute("stroke-width", "5");
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("stroke-dasharray", endSnap.snapped ? "none" : "8 5");
+      line.setAttribute("opacity", "0.95");
+      g.appendChild(line);
+
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", String(endSnap.x * SVG_W));
+      dot.setAttribute("cy", String(endSnap.y * SVG_H));
+      dot.setAttribute("r", endSnap.snapped ? "6" : "5");
+      dot.setAttribute("fill", endSnap.snapped ? "#ffe082" : "#00e5ff");
+      dot.setAttribute("stroke", "#ffffff");
+      dot.setAttribute("stroke-width", "2");
+      g.appendChild(dot);
+    }
+
+    svg.appendChild(g);
+  }
+
   function drawPathLiveStroke(svg, state, committed) {
     if (!state && !committed) return;
     const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -1372,23 +1557,26 @@
 
     if (state) {
       const start = normFromGrid(state.startTx, state.startTy);
-      const end = { x: state.curX ?? start.x, y: state.curY ?? start.y };
+      const endAnchor = pathDragAnchor({ x: state.curX, y: state.curY });
+      const end = normFromGrid(endAnchor.tx, endAnchor.ty);
+      const snapped = endAnchor.snapped;
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.setAttribute("x1", String(start.x * SVG_W));
       line.setAttribute("y1", String(start.y * SVG_H));
       line.setAttribute("x2", String(end.x * SVG_W));
       line.setAttribute("y2", String(end.y * SVG_H));
-      line.setAttribute("stroke", "#00e5ff");
+      line.setAttribute("stroke", snapped ? "#ffe082" : "#00e5ff");
       line.setAttribute("stroke-width", String(pathStrokeWidthPx(state.width)));
       line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("stroke-dasharray", snapped ? "none" : "8 5");
       line.setAttribute("opacity", "0.95");
       g.appendChild(line);
 
       const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       dot.setAttribute("cx", String(end.x * SVG_W));
       dot.setAttribute("cy", String(end.y * SVG_H));
-      dot.setAttribute("r", "5");
-      dot.setAttribute("fill", "#00e5ff");
+      dot.setAttribute("r", snapped ? "6" : "5");
+      dot.setAttribute("fill", snapped ? "#ffe082" : "#00e5ff");
       dot.setAttribute("stroke", "#ffffff");
       dot.setAttribute("stroke-width", "2");
       g.appendChild(dot);
@@ -1721,18 +1909,11 @@
       });
     });
 
-    if (draftQueuePoints.length >= 1 && (accessLayers.queues || accessTool === "drawQueue")) {
-      const draft = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      draft.setAttribute("fill", "none");
-      draft.setAttribute(
-        "points",
-        draftQueuePoints.map((p) => `${p.x * SVG_W},${p.y * SVG_H}`).join(" ")
-      );
-      draft.setAttribute("stroke", "#80deea");
-      draft.setAttribute("stroke-width", "4");
-      draft.setAttribute("stroke-dasharray", "6 4");
-      draft.style.pointerEvents = "none";
-      svg.appendChild(draft);
+    if (
+      (queueDragState || draftQueuePoints.length >= 1) &&
+      (accessLayers.queues || accessTool === "drawQueue")
+    ) {
+      drawQueueLiveStroke(svg, queueDragState, draftQueuePoints);
     }
 
     if ((draftBarrierTiles.size || barrierDragPreviewTiles.size) && (accessLayers.barriers || accessTool === "drawBarrier")) {
@@ -2231,6 +2412,7 @@
     pathDragPreviewTiles = new Set();
     pathDraftVertices = [];
     draftQueuePoints = [];
+    queueDragState = null;
     syncAccessToolbarButtons();
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
@@ -2240,7 +2422,7 @@
       placeSpawn:
         "Click a painted path to snap a token spawn. Set ticket class first — sim injects tokens here.",
       drawQueue:
-        "Draw a queue line from the back of the line toward the scanner. Points snap to the 400×225 tile grid. Pick a scanner first.",
+        "Drag from the back of the line toward the scanner — cyan line follows the cursor; release near a portal to snap. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
       linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
@@ -2726,6 +2908,18 @@
       setStatus("Select a scanner for this queue line.");
       return;
     }
+    const gate = (getDashGates() || []).find((g) => g.id === gateId);
+    if (gate) {
+      const mx = gate.map_x ?? gate.mapX;
+      const my = gate.map_y ?? gate.mapY;
+      if (mx != null && my != null) {
+        const end = snapQueueEndpoint({ x: mx, y: my });
+        const last = draftQueuePoints[draftQueuePoints.length - 1];
+        if (Math.hypot(last.x - end.x, last.y - end.y) > 1e-6) {
+          appendQueueSegment(last.x, last.y, end.x, end.y);
+        }
+      }
+    }
     const name = document.getElementById("accessQueueName")?.value?.trim() || "Queue";
     const created = await api(`/events/${getDashEvent().id}/access-queues`, {
       method: "POST",
@@ -2746,6 +2940,8 @@
 
   window.cancelDraftQueue = function () {
     draftQueuePoints = [];
+    queueDragState = null;
+    unbindPathDragListeners();
     drawAccessLayers();
     setStatus("Queue drawing cancelled.");
   };
@@ -3002,14 +3198,6 @@
     }
 
     if (accessTool === "drawQueue") {
-      const gates = getDashGates() || [];
-      if (!gates.length) {
-        setStatus("Place a scanner first, then draw the queue line toward it.");
-        return true;
-      }
-      appendQueueVertexPoint(p);
-      drawAccessLayers();
-      setStatus(`Queue point ${draftQueuePoints.length} (grid vertex). Click Finish Queue when done.`);
       return true;
     }
 
@@ -3203,6 +3391,13 @@
             e.stopPropagation();
             return;
           }
+          if (accessTool === "drawQueue") {
+            const p = mapXY(e);
+            beginQueueDrag(p);
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (accessTool !== "drawBarrier") return;
           const p = mapXY(e);
           beginBarrierDrag(p);
@@ -3239,6 +3434,12 @@
             endPathDrag();
             e.preventDefault();
             e.stopPropagation();
+            return;
+          }
+          if (queueDragState) {
+            endQueueDrag();
+            e.preventDefault();
+            e.stopPropagation();
           }
         },
         true
@@ -3248,12 +3449,14 @@
         () => {
           if (barrierDragState) endBarrierDrag();
           if (pathDragState) endPathDrag();
+          if (queueDragState) endQueueDrag();
         },
         true
       );
       document.addEventListener("mouseup", () => {
         if (barrierDragState) endBarrierDrag();
         if (pathDragState) endPathDrag();
+        if (queueDragState) endQueueDrag();
       });
       mapWrap.addEventListener(
         "click",

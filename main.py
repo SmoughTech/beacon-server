@@ -1224,7 +1224,7 @@ DASH_HTML = r'''
         <div id="accessSectionPaths" class="accessSection hidden">
           <h3>Paths</h3>
           <div id="accessPathSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Drag to paint corridors in the order guests should walk. First painted end = upstream; set flow direction after saving.</p>
+            <p class="small" style="margin:0 0 8px">Drag to paint corridors. Release near a queue tail (yellow dot) to snap the path entrance. Set flow direction after saving.</p>
             <div class="row">
               <div><label>Path name</label><input id="accessPathName" placeholder="Main walkway" /></div>
               <div><label>Brush width</label><select id="accessPathWidth"><option value="1">1 tile (2ft)</option><option value="2">2 tiles (4ft)</option><option value="4">4 tiles (8ft)</option></select></div>
@@ -1256,7 +1256,7 @@ DASH_HTML = r'''
         <div id="accessSectionQueues" class="accessSection hidden">
           <h3>Queues</h3>
           <div id="accessQueueSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Click from the back of the line toward the scanner. Points snap to the 400×225 tile grid.</p>
+            <p class="small" style="margin:0 0 8px">Drag from the back of the line toward the scanner — cyan preview follows the cursor. Release near a portal to snap; pick a scanner first.</p>
             <div class="row">
               <div><label>Queue name</label><input id="accessQueueName" placeholder="North gate queue" /></div>
               <div><label>Scanner</label><select id="accessQueueGate"></select></div>
@@ -1532,8 +1532,8 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.15.0"></script>
-<script src="/static/dash/crowd-sim.js?v=1.4.0"></script>
+<script src="/static/dash/access-control.js?v=3.16.0"></script>
+<script src="/static/dash/crowd-sim.js?v=1.5.0"></script>
 </body>
 </html>
 '''

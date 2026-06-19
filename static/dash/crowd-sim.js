@@ -16,12 +16,12 @@
   let simScannerFlash = {};
 
   const STATE_COLORS = {
-    on_path: "#42a5f5",
-    walking: "#42a5f5",
-    in_queue: "#ffb300",
-    queuing: "#ffb300",
-    scanning: "#ab47bc",
-    idle: "#66bb6a",
+    on_path: "#e53935",
+    walking: "#e53935",
+    in_queue: "#ff5252",
+    queuing: "#ff5252",
+    scanning: "#d32f2f",
+    idle: "#c62828",
   };
 
   function getEventId() {
@@ -99,16 +99,16 @@
     const svg = ensureSimSvg();
     if (!svg) return;
     svg.innerHTML = "";
-    const r = agentRadiusPx();
+    const r = agentRadiusPx() * 1.15;
     for (const agent of simAgents) {
       const { x, y } = toSvg(agent.tx, agent.ty);
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", String(x));
       circle.setAttribute("cy", String(y));
       circle.setAttribute("r", String(r));
-      circle.setAttribute("fill", STATE_COLORS[agent.state] || "#90caf9");
-      circle.setAttribute("stroke", agent.state === "scanning" ? "#ffeb3b" : "#111");
-      circle.setAttribute("stroke-width", agent.state === "scanning" ? "1.2" : "0.6");
+      circle.setAttribute("fill", STATE_COLORS[agent.state] || "#e53935");
+      circle.setAttribute("stroke", agent.state === "scanning" ? "#ffeb3b" : "#fff");
+      circle.setAttribute("stroke-width", agent.state === "scanning" ? "1.4" : "1");
       svg.appendChild(circle);
     }
     const stage = document.getElementById("mapStage");
