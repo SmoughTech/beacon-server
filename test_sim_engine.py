@@ -50,7 +50,7 @@ def test_token_deleted_after_scan():
     assert len(engine.tokens) == 1
     token = engine.tokens[0]
     engine._start_scan(token)
-    assert engine.gate_flash.get("g1") == 60
+    assert engine.gate_flash.get("g1") == 90
     token.scan_timer = 1
     engine.advance_token(token)
     assert len(engine.tokens) == 0
@@ -71,6 +71,40 @@ def test_queue_waits_for_tail():
     engine.tokens = [t1, t2]
     engine._advance_queue(t2)
     assert t2.queue_index is None
+
+
+def test_queue_does_not_scan_before_reaching_head():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gate_x, gate_y = 0.52, 0.48
+    gx, gy = 208, 108  # approx grid for gate
+    gates = [{"id": "g1", "map_x": gate_x, "map_y": gate_y, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[gx, gy], [gx + 1, gy]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": (gx - 5) / 400, "y": gy / 225},
+                {"x": (gx - 1) / 400, "y": gy / 225},
+                {"x": gate_x, "y": gate_y},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    token = Token(
+        id=1,
+        ticket_class="ga",
+        path_id="p1",
+        path_index=1,
+        tx=gx + 1,
+        ty=gy,
+        stage=TokenStage.IN_QUEUE,
+        target_gate_id="g1",
+    )
+    engine.tokens = [token]
+    engine._advance_queue(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.scan_timer == 0
 
 
 def test_spawn_requires_spawn_point():

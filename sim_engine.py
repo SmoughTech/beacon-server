@@ -13,7 +13,7 @@ from access_control import normalize_path_flow_direction, normalize_zone_class
 from tile_grid import TILE_COLS, TILE_ROWS, grid_from_norm, norm_from_grid
 
 SIM_TICK_HZ = 30
-SCAN_TIME_TICKS = 60  # 2 s at 30 Hz — visible scanner flash
+SCAN_TIME_TICKS = 90  # 3 s at 30 Hz — visible queue + scan feedback
 PATH_STEP_EVERY_TICKS = 6  # ~5 path tiles/sec
 QUEUE_STEP_EVERY_TICKS = 5  # ~6 queue tiles/sec
 DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
@@ -320,10 +320,16 @@ class TokenFlowEngine:
     def on_queue_head(self, token: Token) -> bool:
         if not token.target_gate_id:
             return False
+        tiles = self.queue_tiles(token.target_gate_id)
         head = self.queue_head_tile(token.target_gate_id)
         if not head:
             return False
-        return _manhattan((token.tx, token.ty), head) <= 1
+        pos = (token.tx, token.ty)
+        if tiles:
+            if token.queue_index is None or token.queue_index < len(tiles) - 1:
+                return False
+            return pos == tiles[-1] or pos == head
+        return pos == head
 
     def greedy_step_toward(
         self,
@@ -377,6 +383,9 @@ class TokenFlowEngine:
         token.scan_timer = SCAN_TIME_TICKS
         if token.target_gate_id:
             self.gate_flash[token.target_gate_id] = SCAN_TIME_TICKS
+            head = self.queue_head_tile(token.target_gate_id)
+            if head:
+                token.tx, token.ty = head
 
     def _finish_scan(self, token: Token) -> None:
         self.tokens = [t for t in self.tokens if t.id != token.id]
@@ -399,7 +408,7 @@ class TokenFlowEngine:
 
         gate_id = token.target_gate_id
         if not gate_id:
-            self._finish_scan(token)
+            self._start_scan(token)
             return
 
         tiles = self.queue_tiles(gate_id)
@@ -415,6 +424,8 @@ class TokenFlowEngine:
         if not tiles:
             if head and self.greedy_step_toward(token, head, occupied):
                 token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
+            elif head and (token.tx, token.ty) == head:
+                self._start_scan(token)
             return
 
         tail = tiles[0]
@@ -429,6 +440,8 @@ class TokenFlowEngine:
             return
 
         if token.queue_index >= len(tiles) - 1:
+            if (token.tx, token.ty) == tiles[-1] or (head and (token.tx, token.ty) == head):
+                self._start_scan(token)
             return
 
         next_idx = token.queue_index + 1
@@ -518,6 +531,13 @@ class TokenFlowEngine:
                     "path_id": t.path_id,
                     "path_index": t.path_index,
                     "queue_index": t.queue_index,
+                    "gate_id": t.target_gate_id,
+                    "scan_timer": t.scan_timer if t.stage == TokenStage.SCANNING else 0,
+                    "scan_progress": (
+                        1.0 - (t.scan_timer / SCAN_TIME_TICKS)
+                        if t.stage == TokenStage.SCANNING
+                        else None
+                    ),
                 }
                 for t in self.tokens
             ],

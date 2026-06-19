@@ -18,9 +18,9 @@
   const STATE_COLORS = {
     on_path: "#e53935",
     walking: "#e53935",
-    in_queue: "#ff5252",
-    queuing: "#ff5252",
-    scanning: "#d32f2f",
+    in_queue: "#ff9800",
+    queuing: "#ff9800",
+    scanning: "#ffeb3b",
     idle: "#c62828",
   };
 
@@ -99,17 +99,80 @@
     const svg = ensureSimSvg();
     if (!svg) return;
     svg.innerHTML = "";
-    const r = agentRadiusPx() * 1.15;
+    const baseR = agentRadiusPx() * 1.15;
+
     for (const agent of simAgents) {
       const { x, y } = toSvg(agent.tx, agent.ty);
+      const state = agent.state || "on_path";
+      const isQueue = state === "in_queue" || state === "queuing";
+      const isScan = state === "scanning";
+      const scanProgress = isScan ? Math.max(0, Math.min(1, Number(agent.scan_progress ?? 0))) : 0;
+      const r = isScan ? baseR * 1.35 : isQueue ? baseR * 1.05 : baseR;
+
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("data-agent-id", String(agent.id));
+
+      if (isScan) {
+        const ringR = r + 4 + scanProgress * 10;
+        const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        ring.setAttribute("cx", String(x));
+        ring.setAttribute("cy", String(y));
+        ring.setAttribute("r", String(ringR));
+        ring.setAttribute("fill", "none");
+        ring.setAttribute("stroke", "#ab47bc");
+        ring.setAttribute("stroke-width", "2.5");
+        ring.setAttribute("opacity", String(0.35 + scanProgress * 0.55));
+        g.appendChild(ring);
+
+        const arcR = r + 2;
+        const arc = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        arc.setAttribute("cx", String(x));
+        arc.setAttribute("cy", String(y));
+        arc.setAttribute("r", String(arcR));
+        arc.setAttribute("fill", "none");
+        arc.setAttribute("stroke", "#ffeb3b");
+        arc.setAttribute("stroke-width", "3");
+        arc.setAttribute(
+          "stroke-dasharray",
+          `${Math.max(1, scanProgress * 2 * Math.PI * arcR)} ${Math.max(1, 2 * Math.PI * arcR)}`
+        );
+        arc.setAttribute("transform", `rotate(-90 ${x} ${y})`);
+        g.appendChild(arc);
+      } else if (isQueue) {
+        const halo = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        halo.setAttribute("cx", String(x));
+        halo.setAttribute("cy", String(y));
+        halo.setAttribute("r", String(r + 3));
+        halo.setAttribute("fill", "none");
+        halo.setAttribute("stroke", "#ffb74d");
+        halo.setAttribute("stroke-width", "1.5");
+        halo.setAttribute("stroke-dasharray", "3 2");
+        halo.setAttribute("opacity", "0.9");
+        g.appendChild(halo);
+      }
+
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", String(x));
       circle.setAttribute("cy", String(y));
       circle.setAttribute("r", String(r));
-      circle.setAttribute("fill", STATE_COLORS[agent.state] || "#e53935");
-      circle.setAttribute("stroke", agent.state === "scanning" ? "#ffeb3b" : "#fff");
-      circle.setAttribute("stroke-width", agent.state === "scanning" ? "1.4" : "1");
-      svg.appendChild(circle);
+      circle.setAttribute("fill", STATE_COLORS[state] || "#e53935");
+      circle.setAttribute("stroke", isScan ? "#fff" : isQueue ? "#ffe0b2" : "#fff");
+      circle.setAttribute("stroke-width", isScan ? "2" : "1");
+      g.appendChild(circle);
+
+      if (isScan) {
+        const check = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        check.setAttribute("x", String(x));
+        check.setAttribute("y", String(y + 3));
+        check.setAttribute("text-anchor", "middle");
+        check.setAttribute("fill", "#5d4037");
+        check.setAttribute("font-size", String(Math.max(6, r * 1.1)));
+        check.setAttribute("font-weight", "700");
+        check.textContent = scanProgress > 0.85 ? "✓" : "…";
+        g.appendChild(check);
+      }
+
+      svg.appendChild(g);
     }
     const stage = document.getElementById("mapStage");
     if (simSvg && stage) stage.appendChild(simSvg);
@@ -120,7 +183,10 @@
     const el = document.getElementById("simStats");
     if (!el) return;
     const s = simStats || {};
-    let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • active ${s.active ?? simAgents.length} • on map ${simAgents.length}`;
+    const inQueue = simAgents.filter((a) => a.state === "in_queue" || a.state === "queuing").length;
+    const scanning = simAgents.filter((a) => a.state === "scanning").length;
+    const onPath = simAgents.filter((a) => a.state === "on_path" || a.state === "walking").length;
+    let text = `Tick ${simTick} • spawned ${s.spawned || 0} • scanned ${s.scanned || 0} • path ${onPath} • queue ${inQueue} • scanning ${scanning}`;
     if (simPlaying) text += " • ▶ playing";
     if (simWarnings.length) {
       text += " • ⚠ " + simWarnings.join(" ");
