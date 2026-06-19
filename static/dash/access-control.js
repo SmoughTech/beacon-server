@@ -3380,7 +3380,7 @@
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (e.button !== 0) return;
-          if (accessTool === "drawQueue" || accessTool === "fillZone" || accessTool === "workLocations" || accessTool === "placeSpawn") {
+          if (accessTool === "fillZone" || accessTool === "workLocations" || accessTool === "placeSpawn") {
             e.preventDefault();
             return;
           }
@@ -3417,6 +3417,11 @@
           if (pathDragState) {
             const p = mapXY(e);
             updatePathDrag(p);
+            return;
+          }
+          if (queueDragState) {
+            const p = mapXY(e);
+            updateQueueDrag(p);
           }
         },
         true
@@ -3471,7 +3476,7 @@
             accessTool !== "placeSpawn"
           )
             return;
-          if (accessTool === "drawBarrier" || accessTool === "drawPath") {
+          if (accessTool === "drawBarrier" || accessTool === "drawPath" || accessTool === "drawQueue") {
             e.stopImmediatePropagation();
             return;
           }
