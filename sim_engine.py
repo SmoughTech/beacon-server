@@ -13,8 +13,10 @@ from access_control import normalize_path_flow_direction, normalize_zone_class
 from tile_grid import TILE_COLS, TILE_ROWS, grid_from_norm, norm_from_grid
 
 SIM_TICK_HZ = 30
-SCAN_TIME_TICKS = 45
-PATH_STEP_EVERY_TICKS = 1
+SCAN_TIME_TICKS = 60  # 2 s at 30 Hz — visible scanner flash
+PATH_STEP_EVERY_TICKS = 6  # ~5 path tiles/sec
+QUEUE_STEP_EVERY_TICKS = 5  # ~6 queue tiles/sec
+DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
 class TokenStage(str, Enum):
@@ -75,6 +77,8 @@ class Token:
     target_zone_id: str | None = None
     spawn_point_id: str | None = None
     scan_timer: int = 0
+    queue_index: int | None = None
+    step_cooldown: int = 0
 
 
 class SimResetRequest(BaseModel):
@@ -175,6 +179,7 @@ class TokenFlowEngine:
         self.stats = {"spawned": 0, "scanned": 0, "active": 0}
         self.warnings: list[str] = []
         self._spawn_point_cursor = 0
+        self.gate_flash: dict[str, int] = {}
 
     def configure_spawns(self, ga_count: int, vip_count: int, spawn_interval: int) -> None:
         self.spawn_interval = spawn_interval
@@ -189,6 +194,7 @@ class TokenFlowEngine:
         self.next_token_id = 1
         self.tick = 0
         self.stats = {"spawned": 0, "scanned": 0, "active": 0}
+        self.gate_flash = {}
         self.configure_spawns(ga_count, vip_count, spawn_interval)
         self.warnings = self.diagnostics()
         if self.spawn_plan:
@@ -275,14 +281,41 @@ class TokenFlowEngine:
             return True
         return False
 
+    def queue_tiles(self, gate_id: str | None) -> list[tuple[int, int]]:
+        if not gate_id:
+            return []
+        return self.queues_by_gate.get(gate_id) or []
+
     def queue_head_tile(self, gate_id: str) -> tuple[int, int] | None:
-        tiles = self.queues_by_gate.get(gate_id) or []
+        tiles = self.queue_tiles(gate_id)
         if tiles:
             return tiles[-1]
         gate = next((g for g in self.gates if g["id"] == gate_id), None)
         if not gate:
             return None
         return grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+
+    def queue_tail_tile(self, gate_id: str) -> tuple[int, int] | None:
+        tiles = self.queue_tiles(gate_id)
+        if tiles:
+            return tiles[0]
+        return self.queue_head_tile(gate_id)
+
+    def token_at(self, tx: int, ty: int) -> Token | None:
+        for token in self.tokens:
+            if token.tx == tx and token.ty == ty:
+                return token
+        return None
+
+    def queue_index_taken(self, gate_id: str, index: int, except_id: int) -> bool:
+        for token in self.tokens:
+            if token.id == except_id or token.target_gate_id != gate_id:
+                continue
+            if token.stage not in (TokenStage.IN_QUEUE, TokenStage.SCANNING):
+                continue
+            if token.queue_index == index:
+                return True
+        return False
 
     def on_queue_head(self, token: Token) -> bool:
         if not token.target_gate_id:
@@ -292,15 +325,29 @@ class TokenFlowEngine:
             return False
         return _manhattan((token.tx, token.ty), head) <= 1
 
-    def queue_step_toward_head(self, token: Token) -> tuple[int, int] | None:
-        tiles = self.queues_by_gate.get(token.target_gate_id or "") or []
-        if not tiles:
-            return None
+    def greedy_step_toward(
+        self,
+        token: Token,
+        goal: tuple[int, int],
+        occupied_check: Callable[[int, int], bool],
+    ) -> bool:
         pos = (token.tx, token.ty)
-        best_i = min(range(len(tiles)), key=lambda i: _manhattan(pos, tiles[i]))
-        if best_i >= len(tiles) - 1:
-            return tiles[-1]
-        return tiles[best_i + 1]
+        if pos == goal:
+            return False
+        best: tuple[int, int] | None = None
+        best_score = 10**9
+        for dx, dy in DIRS:
+            nx, ny = token.tx + dx, token.ty + dy
+            if occupied_check(nx, ny):
+                continue
+            score = _manhattan((nx, ny), goal)
+            if score < best_score:
+                best_score = score
+                best = (nx, ny)
+        if best is None or best == pos:
+            return False
+        token.tx, token.ty = best
+        return True
 
     def path_tile_taken(self, path_id: str, index: int, except_id: int) -> bool:
         for token in self.tokens:
@@ -319,22 +366,80 @@ class TokenFlowEngine:
         return False
 
     def enter_queue(self, token: Token) -> None:
-        if not token.target_gate_id:
-            self._finish_scan(token)
+        if token.stage == TokenStage.IN_QUEUE:
             return
-        tiles = self.queues_by_gate.get(token.target_gate_id) or []
-        if tiles:
-            token.tx, token.ty = tiles[0]
-        else:
-            gate = next((g for g in self.gates if g["id"] == token.target_gate_id), None)
-            if gate:
-                token.tx, token.ty = grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
         token.stage = TokenStage.IN_QUEUE
+        token.queue_index = None
+        token.step_cooldown = 0
+
+    def _start_scan(self, token: Token) -> None:
+        token.stage = TokenStage.SCANNING
+        token.scan_timer = SCAN_TIME_TICKS
+        if token.target_gate_id:
+            self.gate_flash[token.target_gate_id] = SCAN_TIME_TICKS
 
     def _finish_scan(self, token: Token) -> None:
         self.tokens = [t for t in self.tokens if t.id != token.id]
         self.stats["scanned"] += 1
         self.stats["active"] = len(self.tokens)
+
+    def _tick_gate_flash(self) -> None:
+        expired: list[str] = []
+        for gate_id, remaining in self.gate_flash.items():
+            self.gate_flash[gate_id] = remaining - 1
+            if self.gate_flash[gate_id] <= 0:
+                expired.append(gate_id)
+        for gate_id in expired:
+            del self.gate_flash[gate_id]
+
+    def _advance_queue(self, token: Token) -> None:
+        if token.step_cooldown > 0:
+            token.step_cooldown -= 1
+            return
+
+        gate_id = token.target_gate_id
+        if not gate_id:
+            self._finish_scan(token)
+            return
+
+        tiles = self.queue_tiles(gate_id)
+        head = self.queue_head_tile(gate_id)
+
+        if self.on_queue_head(token):
+            self._start_scan(token)
+            return
+
+        def occupied(nx: int, ny: int) -> bool:
+            return self.queue_tile_taken(nx, ny, token.id)
+
+        if not tiles:
+            if head and self.greedy_step_toward(token, head, occupied):
+                token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
+            return
+
+        tail = tiles[0]
+
+        if token.queue_index is None:
+            if (token.tx, token.ty) == tail:
+                if not self.queue_index_taken(gate_id, 0, token.id):
+                    token.queue_index = 0
+                return
+            if self.greedy_step_toward(token, tail, occupied):
+                token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
+            return
+
+        if token.queue_index >= len(tiles) - 1:
+            return
+
+        next_idx = token.queue_index + 1
+        if self.queue_index_taken(gate_id, next_idx, token.id):
+            return
+        nxt = tiles[next_idx]
+        if self.queue_tile_taken(nxt[0], nxt[1], token.id):
+            return
+        token.queue_index = next_idx
+        token.tx, token.ty = nxt
+        token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
 
     def advance_token(self, token: Token) -> None:
         if token.stage == TokenStage.SCANNING:
@@ -344,13 +449,11 @@ class TokenFlowEngine:
             return
 
         if token.stage == TokenStage.IN_QUEUE:
-            if self.on_queue_head(token):
-                token.stage = TokenStage.SCANNING
-                token.scan_timer = SCAN_TIME_TICKS
-                return
-            nxt = self.queue_step_toward_head(token)
-            if nxt and not self.queue_tile_taken(nxt[0], nxt[1], token.id):
-                token.tx, token.ty = nxt
+            self._advance_queue(token)
+            return
+
+        if token.step_cooldown > 0:
+            token.step_cooldown -= 1
             return
 
         track = self.paths_by_id.get(token.path_id)
@@ -373,9 +476,11 @@ class TokenFlowEngine:
             return
         token.path_index = nxt_idx
         token.tx, token.ty = nxt_tile
+        token.step_cooldown = PATH_STEP_EVERY_TICKS - 1
 
     def tick_once(self) -> None:
         self.tick += 1
+        self._tick_gate_flash()
         if self.spawn_cursor < len(self.spawn_plan):
             self.spawn_cooldown -= 1
             if self.spawn_cooldown <= 0:
@@ -395,6 +500,14 @@ class TokenFlowEngine:
             "stats": self.stats,
             "warnings": getattr(self, "warnings", []),
             "spawn_remaining": max(0, len(self.spawn_plan) - self.spawn_cursor),
+            "scanner_activity": [
+                {
+                    "gate_id": gate_id,
+                    "remaining_ticks": remaining,
+                    "progress": min(1.0, remaining / SCAN_TIME_TICKS),
+                }
+                for gate_id, remaining in self.gate_flash.items()
+            ],
             "agents": [
                 {
                     "id": t.id,
@@ -404,6 +517,7 @@ class TokenFlowEngine:
                     "state": t.stage.value,
                     "path_id": t.path_id,
                     "path_index": t.path_index,
+                    "queue_index": t.queue_index,
                 }
                 for t in self.tokens
             ],

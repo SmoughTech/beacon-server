@@ -1,6 +1,6 @@
 """Tests for token flow processor."""
 
-from sim_engine import PathTrack, TokenFlowEngine, TokenStage
+from sim_engine import PathTrack, Token, TokenFlowEngine, TokenStage
 
 
 def test_path_track_flow_forward():
@@ -49,11 +49,28 @@ def test_token_deleted_after_scan():
     engine.reset(ga_count=1, vip_count=0, spawn_interval=100)
     assert len(engine.tokens) == 1
     token = engine.tokens[0]
-    token.stage = TokenStage.SCANNING
+    engine._start_scan(token)
+    assert engine.gate_flash.get("g1") == 60
     token.scan_timer = 1
     engine.advance_token(token)
     assert len(engine.tokens) == 0
     assert engine.stats["scanned"] == 1
+
+
+def test_queue_waits_for_tail():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.5, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[5, 5]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [{"gate_id": "g1", "points": [{"x": 0.1, "y": 0.2}, {"x": 0.12, "y": 0.2}]}]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    t1 = Token(id=1, ticket_class="ga", path_id="p1", path_index=0, tx=5, ty=5, stage=TokenStage.IN_QUEUE, target_gate_id="g1", queue_index=0)
+    t1.tx, t1.ty = engine.queue_tiles("g1")[0]
+    t2 = Token(id=2, ticket_class="ga", path_id="p1", path_index=0, tx=5, ty=5, stage=TokenStage.IN_QUEUE, target_gate_id="g1", queue_index=None)
+    t2.tx, t2.ty = 5, 5
+    engine.tokens = [t1, t2]
+    engine._advance_queue(t2)
+    assert t2.queue_index is None
 
 
 def test_spawn_requires_spawn_point():

@@ -13,6 +13,7 @@
   let simSpawnRemaining = 0;
   let simTick = 0;
   let simSvg = null;
+  let simScannerFlash = {};
 
   const STATE_COLORS = {
     on_path: "#42a5f5",
@@ -71,6 +72,25 @@
     drawSimAgents();
   }
 
+  function updateScannerFlash() {
+    const flashByGate = simScannerFlash || {};
+    document.querySelectorAll(".marker.gate").forEach((el) => {
+      const gid = el.dataset.gateId;
+      const activity = gid ? flashByGate[gid] : null;
+      const progress = activity != null ? Number(activity.progress ?? activity) : 0;
+      if (progress > 0) {
+        el.classList.add("sim-scanning");
+        const glow = 6 + progress * 18;
+        el.style.boxShadow = `0 0 ${glow}px rgba(171, 71, 188, ${0.45 + progress * 0.45}), 0 0 ${glow * 2}px rgba(255, 235, 59, ${progress * 0.35})`;
+        el.style.filter = `brightness(${1 + progress * 0.45})`;
+      } else {
+        el.classList.remove("sim-scanning");
+        el.style.boxShadow = "";
+        el.style.filter = "";
+      }
+    });
+  }
+
   function drawSimAgents() {
     if (typeof currentTab !== "undefined" && currentTab !== "sim") {
       clearSimSvg();
@@ -87,12 +107,13 @@
       circle.setAttribute("cy", String(y));
       circle.setAttribute("r", String(r));
       circle.setAttribute("fill", STATE_COLORS[agent.state] || "#90caf9");
-      circle.setAttribute("stroke", "#111");
-      circle.setAttribute("stroke-width", "0.6");
+      circle.setAttribute("stroke", agent.state === "scanning" ? "#ffeb3b" : "#111");
+      circle.setAttribute("stroke-width", agent.state === "scanning" ? "1.2" : "0.6");
       svg.appendChild(circle);
     }
     const stage = document.getElementById("mapStage");
     if (simSvg && stage) stage.appendChild(simSvg);
+    updateScannerFlash();
   }
 
   function updateSimStats() {
@@ -169,6 +190,10 @@
     simWarnings = data.warnings || [];
     simTick = data.tick || 0;
     simSpawnRemaining = data.spawn_remaining || 0;
+    simScannerFlash = {};
+    for (const item of data.scanner_activity || []) {
+      if (item.gate_id) simScannerFlash[item.gate_id] = item;
+    }
     updateSimStats();
     drawSimAgents();
   }
@@ -209,6 +234,8 @@
     if (tab !== "sim") {
       simStop();
       clearSimSvg();
+      simScannerFlash = {};
+      updateScannerFlash();
       return;
     }
     refreshSimMap().catch(() => {});
