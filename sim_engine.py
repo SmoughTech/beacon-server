@@ -151,6 +151,17 @@ class CrowdSimEngine:
         self.blocked = [[wall[gy][gx] == 1 for gx in range(TILE_COLS)] for gy in range(TILE_ROWS)]
         self.surface = build_surface_grid(barriers, gates, zones, paths)
 
+        # Pathfinding reads occupancy — initialize before queue synthesis.
+        self.agents: list[SimAgent] = []
+        self.next_agent_id = 1
+        self.tick = 0
+        self.spawn_interval = 15
+        self.spawn_plan: list[str] = []
+        self.spawn_cursor = 0
+        self.spawn_cooldown = 0
+        self.stats = {"spawned": 0, "scanned": 0, "idle": 0}
+        self.warnings: list[str] = []
+
         for gid in list(self.queues_by_gate.keys()):
             normalized = self._normalize_queue_tiles(self.queues_by_gate[gid])
             if normalized:
@@ -171,16 +182,6 @@ class CrowdSimEngine:
                 self.layout_warnings.append(
                     f'Scanner "{name}" has no queue line — sim uses an auto queue toward the scanner.'
                 )
-
-        self.agents: list[SimAgent] = []
-        self.next_agent_id = 1
-        self.tick = 0
-        self.spawn_interval = 15
-        self.spawn_plan: list[str] = []
-        self.spawn_cursor = 0
-        self.spawn_cooldown = 0
-        self.stats = {"spawned": 0, "scanned": 0, "idle": 0}
-        self.warnings: list[str] = []
 
         self._spawn_tiles = self._collect_spawn_tiles()
         self._area_tiles_by_zone = self._index_area_tiles()
@@ -396,25 +397,34 @@ class CrowdSimEngine:
             return resolved
         if self.find_path(start, resolved, agent_id):
             return resolved
-        best: tuple[int, int] | None = None
-        best_len = 10**9
-        for radius in range(0, 25):
-            for dx in range(-radius, radius + 1):
-                for dy in range(-radius, radius + 1):
-                    if radius > 0 and max(abs(dx), abs(dy)) != radius:
-                        continue
-                    nx, ny = resolved[0] + dx, resolved[1] + dy
-                    if not self.passable(nx, ny):
-                        continue
-                    if self.adjacent_wall_count(nx, ny) >= 3:
-                        continue
-                    path = self.find_path(start, (nx, ny), agent_id)
-                    if path and len(path) < best_len:
-                        best_len = len(path)
-                        best = (nx, ny)
-            if best:
-                return best
-        return resolved
+
+        occ = self.occupancy(except_id=agent_id)
+        frontier: deque[tuple[int, int]] = deque([start])
+        visited: set[tuple[int, int]] = {start}
+        explored = 0
+        best = resolved
+        best_dist = _manhattan(start, resolved)
+
+        while frontier and explored < MAX_PATHFIND_EXPLORE:
+            pos = frontier.popleft()
+            explored += 1
+            dist = _manhattan(pos, resolved)
+            if dist < best_dist and self.adjacent_wall_count(pos[0], pos[1]) < 3:
+                best_dist = dist
+                best = pos
+            if dist <= 1:
+                return pos
+            for dx, dy in DIRS:
+                nx, ny = pos[0] + dx, pos[1] + dy
+                nxt = (nx, ny)
+                if nxt in visited or not self.passable(nx, ny):
+                    continue
+                if not self.tile_free(nx, ny, occ, agent_id):
+                    continue
+                visited.add(nxt)
+                frontier.append(nxt)
+
+        return best
 
     def greedy_step_toward(
         self,
