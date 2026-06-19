@@ -143,7 +143,11 @@ def _gate_admits(gate: dict[str, Any], ticket_class: str, target_zone_id: str | 
         return False
     if not target_zone_id:
         return True
-    return target_zone_id in (gate.get("zone_a_id"), gate.get("zone_b_id"))
+    zone_a = gate.get("zone_a_id")
+    zone_b = gate.get("zone_b_id")
+    if not zone_a and not zone_b:
+        return True
+    return target_zone_id in (zone_a, zone_b)
 
 
 class TokenFlowEngine:
@@ -439,7 +443,9 @@ class TokenFlowEngine:
         return best_gate
 
     def _resolve_gate_for_queue(self, token: Token) -> str | None:
-        gate_id = self._nearest_queue_gate(token, max_dist=15) or token.target_gate_id
+        if token.target_gate_id and self.queue_tiles(token.target_gate_id):
+            return token.target_gate_id
+        gate_id = self._nearest_queue_gate(token, max_dist=25) or token.target_gate_id
         if not gate_id or not self.queue_tiles(gate_id):
             return None
         return gate_id
@@ -455,7 +461,7 @@ class TokenFlowEngine:
         if not tiles or index < 0 or index >= len(tiles):
             return False
         if self.queue_index_taken(gate_id, index, token.id):
-            return True
+            return False
         token.target_gate_id = gate_id
         if snap_to is not None:
             token.tx, token.ty = snap_to
@@ -478,18 +484,28 @@ class TokenFlowEngine:
         return best_i
 
     def _path_junction_index(self, track: PathTrack, gate_id: str) -> int | None:
-        """First path tile index that meets the queue tail (T-junction)."""
+        """Path tile index closest to the queue tail (T-junction)."""
         tiles = self.queue_tiles(gate_id)
         if not tiles or not track.tiles:
             return None
         tail = tiles[0]
+        max_dist = 4
+        best_i: int | None = None
+        best_d = max_dist + 1
+        downstream = track.downstream_end_index()
         for i, pt in enumerate(track.tiles):
-            if pt == tail or _manhattan(pt, tail) <= 3:
-                return i
-        return None
+            d = _manhattan(pt, tail)
+            if d > max_dist:
+                continue
+            if best_i is None or d < best_d or (d == best_d and abs(i - downstream) < abs(best_i - downstream)):
+                best_i = i
+                best_d = d
+        return best_i
 
     def _try_transition_path_to_queue(self, token: Token) -> bool:
         gate_id = self._resolve_gate_for_queue(token)
+        if not gate_id:
+            gate_id = self._nearest_queue_gate(token, max_dist=30)
         if not gate_id:
             return False
         tiles = self.queue_tiles(gate_id)
@@ -499,32 +515,39 @@ class TokenFlowEngine:
         pos = (token.tx, token.ty)
         scan_idx = self.queue_scan_index(gate_id)
         track = self.paths_by_id.get(token.path_id)
+        tail = tiles[0]
 
-        q_idx = self._queue_index_near(gate_id, pos[0], pos[1], max_dist=2)
+        q_idx = self._queue_index_near(gate_id, pos[0], pos[1], max_dist=3)
         if q_idx is not None and q_idx <= scan_idx:
             return self._claim_queue_index(token, gate_id, q_idx)
 
         if track:
             junction_pi = self._path_junction_index(track, gate_id)
             if junction_pi is not None and token.path_index >= junction_pi:
-                return self._claim_queue_index(token, gate_id, 0, snap_to=tiles[0])
+                return self._claim_queue_index(token, gate_id, 0, snap_to=tail)
 
             nxt_idx = track.next_index(token.path_index)
             if nxt_idx is not None:
                 nxt_tile = track.tile_at(nxt_idx)
                 if nxt_tile:
-                    nxt_q = self._queue_index_near(gate_id, nxt_tile[0], nxt_tile[1], max_dist=2)
+                    nxt_q = self._queue_index_near(gate_id, nxt_tile[0], nxt_tile[1], max_dist=3)
                     if nxt_q is not None and nxt_q <= scan_idx:
                         if self.queue_index_taken(gate_id, nxt_q, token.id):
-                            return True
+                            return False
                         token.path_index = nxt_idx
+                        token.tx, token.ty = nxt_tile
                         return self._claim_queue_index(token, gate_id, nxt_q)
 
         at_path_end = bool(track and track.at_downstream_end(token.path_index))
-        if at_path_end or _manhattan(pos, tiles[0]) <= 6:
-            return self._claim_queue_index(token, gate_id, 0, snap_to=tiles[0])
+        near_tail = _manhattan(pos, tail) <= 10
+        if at_path_end or near_tail:
+            return self._claim_queue_index(token, gate_id, 0, snap_to=tail)
 
         return False
+
+    def _try_join_queue_from_path(self, token: Token) -> bool:
+        """Alias used by tests and legacy callers."""
+        return self._try_transition_path_to_queue(token)
 
     def enter_queue(self, token: Token) -> None:
         if token.stage == TokenStage.IN_QUEUE:

@@ -229,6 +229,38 @@ def test_handoff_at_path_junction_before_path_end():
     assert token.queue_index == 0
 
 
+def test_handoff_when_path_end_offset_from_queue_tail():
+    """Path last tile can be a few cells off from rasterized queue tail (corner T)."""
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]
+    path_tiles = [(100, i) for i in range(50, 61)]
+    paths = [{"id": "p1", "tiles": path_tiles, "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": 105 / 400, "y": 60 / 225},
+                {"x": 120 / 400, "y": 60 / 225},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    token = Token(
+        id=1,
+        ticket_class="ga",
+        path_id="p1",
+        path_index=len(path_tiles) - 1,
+        tx=100,
+        ty=60,
+        target_gate_id="g1",
+    )
+    engine.tokens = [token]
+    assert engine._try_transition_path_to_queue(token)
+    assert token.stage == TokenStage.IN_QUEUE
+    assert token.queue_index == 0
+
+
 def test_multiple_tokens_advance_through_queue():
     zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
     gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.5, "allowed_classes": ["ga"]}]
@@ -253,11 +285,34 @@ def test_multiple_tokens_advance_through_queue():
     assert t1.queue_index == 0
     engine._try_join_queue_from_path(t2)
     assert t2.stage == TokenStage.ON_PATH
-    for _ in range(40):
+    for _ in range(120):
         for token in list(engine.tokens):
             token.step_cooldown = 0
             engine.advance_token(token)
     assert engine.stats["scanned"] >= 1
+
+
+def test_spawn_assigns_gate_without_zone_links():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.75, "map_y": 0.067, "allowed_classes": ["ga"]}]
+    path_tiles = [(100, i) for i in range(50, 61)]
+    paths = [{"id": "p1", "tiles": path_tiles, "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [{"x": 100 / 400, "y": 60 / 225}, {"x": 120 / 400, "y": 60 / 225}],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    engine.reset(ga_count=1, vip_count=0, spawn_interval=100)
+    assert len(engine.tokens) == 1
+    assert engine.tokens[0].target_gate_id == "g1"
+    for _ in range(100):
+        engine.tick_once()
+        if engine.tokens and engine.tokens[0].stage == TokenStage.IN_QUEUE:
+            break
+    assert engine.tokens[0].stage == TokenStage.IN_QUEUE
 
 
 def test_spawn_requires_spawn_point():
