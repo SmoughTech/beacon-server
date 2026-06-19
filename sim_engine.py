@@ -730,7 +730,7 @@ def _load_engine(
         gates = [
             scanner_gate_row_to_dict(r)
             for r in conn.execute(
-                "SELECT * FROM wrstops_gates WHERE event_id = ? ORDER BY name COLLATE NOCASE",
+                "SELECT * FROM scanners WHERE event_id = ? ORDER BY name COLLATE NOCASE",
                 (event_id,),
             ).fetchall()
         ]

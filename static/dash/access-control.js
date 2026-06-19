@@ -8,13 +8,13 @@
   const VERTEX_ROWS = TILE_ROWS + 1;
   const GRID_W = TILE_COLS;
   const GRID_H = TILE_ROWS;
-  const PORTAL_SNAP_DIST = 0.011;
-  const PORTAL_SNAP_RADIUS = 0.014;
+  const SCANNER_SNAP_DIST = 0.011;
+  const SCANNER_SNAP_RADIUS = 0.014;
   const BARRIER_ENDPOINT_SNAP_RADIUS = 0.02;
   const BARRIER_SEGMENT_SNAP_RADIUS = 0.018;
   const SCANNER_FENCE_SNAP_RADIUS = 0.045;
   const PLACEMENT_SNAP_RADIUS = 0.018;
-  const PORTAL_GAP_HALF_WIDTH = 0.014;
+  const SCANNER_GAP_HALF_WIDTH = 0.014;
 
   const ZONE_COLORS = {
     ga: "rgba(76,175,80,0.38)",
@@ -57,7 +57,7 @@
   let queueDragState = null;
   let spawnDragState = null;
   const QUEUE_ENTRANCE_SNAP_RADIUS = 0.028;
-  const QUEUE_PORTAL_SNAP_RADIUS = 0.024;
+  const QUEUE_SCANNER_SNAP_RADIUS = 0.024;
   let pathBrushWidth = 1;
   let draftQueuePoints = [];
   let selectedBarrierId = null;
@@ -66,8 +66,8 @@
   let selectedPathId = null;
   let selectedSpawnId = null;
   let fillZoneClass = "ga";
-  let portalHeadingPreview = null;
-  let portalFlowFlipPreview = null;
+  let scannerHeadingPreview = null;
+  let scannerFlowFlipPreview = null;
   const ACCESS_LAYER_KEY = "beacon_access_layers";
   const SCANNER_SCALE_KEY = "beacon_dash_scanner_scale";
   const SIM_LOCATION_META = {
@@ -300,7 +300,7 @@
   }
 
   function isAccessCategoryVisible(category) {
-    if (accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal" || accessTool === "placeSpawn") {
+    if (accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkAccessRules" || accessTool === "placeSpawn") {
       return false;
     }
     const toolByCategory = {
@@ -343,15 +343,15 @@
     if (hint) {
       hint.classList.toggle(
         "hidden",
-        anyCategoryVisible || accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkPortal" || accessTool === "placeSpawn"
+        anyCategoryVisible || accessTool === "rfidDevices" || accessTool === "workLocations" || accessTool === "linkAccessRules" || accessTool === "placeSpawn"
       );
     }
 
     const footer = document.getElementById("accessLayoutFooter");
     if (footer) footer.classList.toggle("hidden", !anyCategoryVisible);
 
-    const portalEditor = document.getElementById("accessPortalEditor");
-    if (portalEditor) portalEditor.classList.toggle("hidden", accessTool !== "linkPortal");
+    const rulesEditor = document.getElementById("accessRulesEditor");
+    if (rulesEditor) rulesEditor.classList.toggle("hidden", accessTool !== "linkAccessRules");
 
     const barrierEditor = document.getElementById("accessBarrierSection");
     if (barrierEditor) barrierEditor.classList.toggle("hidden", accessTool !== "drawBarrier");
@@ -632,7 +632,7 @@
     if (end.snapped) {
       setStatus(`Queue line: ${count} points — snapped to ${end.gateName || "scanner"}. Drag again or Finish Queue.`);
     } else {
-      setStatus(`Queue line: ${count} points. Drag toward scanner; release near portal to snap.`);
+      setStatus(`Queue line: ${count} points. Drag toward scanner; release near scanner to snap.`);
     }
   }
 
@@ -765,19 +765,19 @@
       const my = gate.map_y ?? gate.mapY;
       if (mx == null || my == null) continue;
       const d = Math.hypot(p.x - mx, p.y - my);
-      if (d < QUEUE_PORTAL_SNAP_RADIUS) {
+      if (d < QUEUE_SCANNER_SNAP_RADIUS) {
         if (gateSelect && !selectedId) gateSelect.value = gate.id;
         return { ...snapQueuePoint({ x: mx, y: my }), snapped: true, gateName: gate.name || gate.id };
       }
     }
 
-    const portalSnap = snapAccessPoint(p, ordered);
-    if (portalSnap.snapped) {
-      if (portalSnap.gateId && gateSelect) gateSelect.value = portalSnap.gateId;
+    const scannerSnap = snapAccessPoint(p, ordered);
+    if (scannerSnap.snapped) {
+      if (scannerSnap.gateId && gateSelect) gateSelect.value = scannerSnap.gateId;
       return {
-        ...snapQueuePoint(portalSnap),
+        ...snapQueuePoint(scannerSnap),
         snapped: true,
-        gateName: portalSnap.gateName,
+        gateName: scannerSnap.gateName,
       };
     }
     return { ...snapQueuePoint(p), snapped: false };
@@ -1099,8 +1099,8 @@
     svg.appendChild(g);
   }
 
-  function syncPortalFlowFlipButton(gate) {
-    const btn = document.getElementById("portalFlowFlipBtn");
+  function syncScannerFlowFlipButton(gate) {
+    const btn = document.getElementById("scannerFlowFlipBtn");
     if (!btn) return;
     const flipped = gate ? gateFlowFlipped(gate) : false;
     btn.classList.toggle("active", flipped);
@@ -1108,7 +1108,7 @@
   }
 
   function updateAccessMapPanel() {
-    const orient = document.getElementById("accessPortalOrient");
+    const orient = document.getElementById("accessScannerOrient");
     syncAccessLayerCheckboxes();
 
     const gateSelected =
@@ -1121,9 +1121,9 @@
     if (orient) {
       orient.classList.toggle("hidden", !activeGate);
       if (activeGate) {
-        const title = document.getElementById("accessPortalOrientTitle");
-        const deg = document.getElementById("accessPortalOrientDeg");
-        const slider = document.getElementById("mapPortalFenceHeading");
+        const title = document.getElementById("accessScannerOrientTitle");
+        const deg = document.getElementById("accessScannerOrientDeg");
+        const slider = document.getElementById("mapScannerFenceHeading");
         const heading = Math.round(gateFenceHeading(activeGate));
         if (title) {
           title.textContent = previewGate
@@ -1132,7 +1132,7 @@
         }
         if (deg) deg.textContent = `${heading}°`;
         if (slider && document.activeElement !== slider) slider.value = String(heading);
-        syncPortalFlowFlipButton(gate);
+        syncScannerFlowFlipButton(gate);
       }
     }
   }
@@ -1143,7 +1143,7 @@
     const my = parseFloat(document.getElementById("newGateMapY")?.value);
     if (!Number.isFinite(mx) || !Number.isFinite(my)) return null;
     const heading = parseInt(
-      document.getElementById("mapPortalFenceHeading")?.value ||
+      document.getElementById("mapScannerFenceHeading")?.value ||
         document.getElementById("newGateFenceHeading")?.value ||
         "0",
       10
@@ -1285,41 +1285,41 @@
 
   function gateFenceHeading(gate) {
     if (
-      portalHeadingPreview != null &&
+      scannerHeadingPreview != null &&
       typeof selectedKind !== "undefined" &&
       (selectedKind === "gate" || selectedKind === "newGate") &&
       typeof selectedId !== "undefined" &&
       (gate?.id === selectedId || gate?.id === "__new_gate_preview__")
     ) {
-      return ((portalHeadingPreview % 360) + 360) % 360;
+      return ((scannerHeadingPreview % 360) + 360) % 360;
     }
     return Number(gate?.fence_heading_deg ?? gate?.fenceHeadingDeg ?? 0) % 360;
   }
 
   function gateFlowFlipped(gate) {
     if (
-      portalFlowFlipPreview != null &&
+      scannerFlowFlipPreview != null &&
       typeof selectedKind !== "undefined" &&
       selectedKind === "gate" &&
       typeof selectedId !== "undefined" &&
       gate?.id === selectedId
     ) {
-      return portalFlowFlipPreview;
+      return scannerFlowFlipPreview;
     }
-    return !!(gate?.portal_flow_flipped ?? gate?.portalFlowFlipped);
+    return !!(gate?.flow_flipped ?? gate?.flowFlipped);
   }
 
   function isGateOnBarrier(gate) {
     return !!(gate?.barrier_id) && gate?.barrier_segment_index != null;
   }
 
-  function portalFenceLineHeading(gate) {
+  function scannerFenceLineHeading(gate) {
     const fence = gateFenceHeading(gate);
     if (isGateOnBarrier(gate)) return (fence + 90) % 360;
     return fence;
   }
 
-  function getPortalFlowHeading(gate) {
+  function getScannerFlowHeading(gate) {
     const fence = gateFenceHeading(gate);
     const flipped = gateFlowFlipped(gate);
     return (fence + 90 + (flipped ? 180 : 0)) % 360;
@@ -1330,19 +1330,19 @@
     return { ux: Math.cos(rad), uy: Math.sin(rad) };
   }
 
-  function getPortalSnapPair(gate) {
+  function getScannerSnapPair(gate) {
     const cx = gate?.map_x ?? gate?.mapX;
     const cy = gate?.map_y ?? gate?.mapY;
     if (cx == null || cy == null) return null;
-    const heading = portalFenceLineHeading(gate);
+    const heading = scannerFenceLineHeading(gate);
     const { ux, uy } = headingUnitRad(heading);
     return {
       gateId: gate.id,
       gateName: gate.name || "Scanner",
       center: { x: cx, y: cy },
       heading,
-      a: { x: cx - ux * PORTAL_SNAP_DIST, y: cy - uy * PORTAL_SNAP_DIST, side: "a" },
-      b: { x: cx + ux * PORTAL_SNAP_DIST, y: cy + uy * PORTAL_SNAP_DIST, side: "b" },
+      a: { x: cx - ux * SCANNER_SNAP_DIST, y: cy - uy * SCANNER_SNAP_DIST, side: "a" },
+      b: { x: cx + ux * SCANNER_SNAP_DIST, y: cy + uy * SCANNER_SNAP_DIST, side: "b" },
     };
   }
 
@@ -1538,7 +1538,7 @@
     if (cx == null || cy == null) return [];
     let t = gate.barrier_segment_t;
     if (t == null) t = projectPointOnSegment(a, b, cx, cy).t;
-    return [[Number(t), PORTAL_GAP_HALF_WIDTH]];
+    return [[Number(t), SCANNER_GAP_HALF_WIDTH]];
   }
 
   function collectGateAttachments(gates) {
@@ -1554,9 +1554,9 @@
 
   function snapAccessPoint(p, gates) {
     let best = null;
-    let bestDist = PORTAL_SNAP_RADIUS;
+    let bestDist = SCANNER_SNAP_RADIUS;
     (gates || []).forEach((gate) => {
-      const pair = getPortalSnapPair(gate);
+      const pair = getScannerSnapPair(gate);
       if (!pair) return;
       [pair.a, pair.b].forEach((pt) => {
         const d = Math.hypot(p.x - pt.x, p.y - pt.y);
@@ -1726,8 +1726,8 @@
     return { x: (gx + 0.5) / TILE_COLS, y: (gy + 0.5) / TILE_ROWS };
   }
 
-  function addPortalVirtualWall(grid, gate) {
-    const pair = getPortalSnapPair(gate);
+  function addScannerVirtualWall(grid, gate) {
+    const pair = getScannerSnapPair(gate);
     if (!pair) return;
     const mark = (gx, gy) => {
       if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) grid[gy][gx] = 1;
@@ -1765,7 +1765,7 @@
       });
     });
 
-    (gates || []).forEach((gate) => addPortalVirtualWall(grid, gate));
+    (gates || []).forEach((gate) => addScannerVirtualWall(grid, gate));
   }
 
   function drawGridLine(grid, x0, y0, x1, y1, mark) {
@@ -2133,7 +2133,7 @@
     }
 
     if (accessLayers.snapPoints || accessLayers.gates) {
-      drawPortalSnapLayers(svg);
+      drawScannerSnapLayers(svg);
     } else if (
       (typeof selectedKind !== "undefined" && (selectedKind === "gate" || selectedKind === "newGate")) ||
       accessTool === "drawBarrier"
@@ -2144,14 +2144,14 @@
           : selectedKind === "newGate"
             ? "__new_gate_preview__"
             : null;
-      drawPortalSnapLayers(svg, onlyId);
+      drawScannerSnapLayers(svg, onlyId);
     }
   }
 
-  function drawPortalFlowArrow(svg, gate, pair, isSelected) {
+  function drawScannerFlowArrow(svg, gate, pair, isSelected) {
     const cx = pair.center.x * SVG_W;
     const cy = pair.center.y * SVG_H;
-    const deg = getPortalFlowHeading(gate);
+    const deg = getScannerFlowHeading(gate);
     const rad = (deg * Math.PI) / 180;
     const ux = Math.cos(rad);
     const uy = Math.sin(rad);
@@ -2196,7 +2196,7 @@
     return { w: 12 * scale, h: 6 * scale };
   }
 
-  function drawPortalFenceSnapGraphics(svg, gate, pair, isSelected) {
+  function drawScannerFenceSnapGraphics(svg, gate, pair, isSelected) {
     const fence = document.createElementNS("http://www.w3.org/2000/svg", "line");
     fence.setAttribute("x1", String(pair.a.x * SVG_W));
     fence.setAttribute("y1", String(pair.a.y * SVG_H));
@@ -2337,7 +2337,7 @@
         try {
           const result = await commitScannerPlacement(gate.id, p.x, p.y);
           if (!result) return;
-          portalHeadingPreview = result.place.fence_heading_deg;
+          scannerHeadingPreview = result.place.fence_heading_deg;
           syncFenceHeadingControls(result.place.fence_heading_deg);
           renderAccessLists();
           updateAccessMapPanel();
@@ -2379,7 +2379,7 @@
           ? null
           : document.querySelector(`.marker.gate[data-gate-id="${gate.id}"]`);
       if (gate.id !== "__new_gate_preview__" && !el) return;
-      const pair = getPortalSnapPair(gate);
+      const pair = getScannerSnapPair(gate);
       if (!pair) return;
       const { ux, uy } = headingUnitRad(pair.heading);
       const half = gateMarkerHalfPx(gate);
@@ -2415,7 +2415,7 @@
     });
   }
 
-  function drawPortalSnapLayers(svg, onlyGateId) {
+  function drawScannerSnapLayers(svg, onlyGateId) {
     const selectedGateId =
       typeof selectedKind !== "undefined" && selectedKind === "gate" ? selectedId : null;
     const previewGate = getNewGatePreview();
@@ -2423,14 +2423,14 @@
 
     gatesForSnapDrawing().forEach((gate) => {
       if (onlyGateId && gate.id !== onlyGateId) return;
-      const pair = getPortalSnapPair(gate);
+      const pair = getScannerSnapPair(gate);
       if (!pair) return;
       const isSelected =
         gate.id === selectedGateId || gate.id === "__new_gate_preview__" || gate.id === onlyGateId;
       const showSnap = showAllSnaps || isSelected;
       const showFlow = accessLayers.snapPoints || accessLayers.gates || isSelected;
 
-      if (showSnap) drawPortalFenceSnapGraphics(svg, gate, pair, isSelected);
+      if (showSnap) drawScannerFenceSnapGraphics(svg, gate, pair, isSelected);
 
       if (accessTool === "drawBarrier") {
         [pair.a, pair.b].forEach((pt) => {
@@ -2439,7 +2439,7 @@
           hit.setAttribute("cy", String(pt.y * SVG_H));
           hit.setAttribute("r", "14");
           hit.setAttribute("fill", "transparent");
-          hit.setAttribute("data-portal-snap", "1");
+          hit.setAttribute("data-scanner-snap", "1");
           hit.style.pointerEvents = "auto";
           hit.style.cursor = "crosshair";
           hit.onclick = (ev) => {
@@ -2454,7 +2454,7 @@
       }
 
       if (showFlow && gate.id !== "__new_gate_preview__") {
-        drawPortalFlowArrow(svg, gate, pair, isSelected);
+        drawScannerFlowArrow(svg, gate, pair, isSelected);
       }
     });
   }
@@ -2515,7 +2515,7 @@
       selectedBarrierId = null;
       selectedQueueId = null;
       selectedPathId = null;
-    } else if (tool === "rfidDevices" || tool === "linkPortal" || tool === "workLocations") {
+    } else if (tool === "rfidDevices" || tool === "linkAccessRules" || tool === "workLocations") {
       selectedBarrierId = null;
       selectedZoneId = null;
       selectedQueueId = null;
@@ -2544,7 +2544,7 @@
       drawQueue:
         "Drag from the back of the line (yellow dot) to the turnstile where scanning happens (cyan dot). Place the scanner marker at that same spot.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
-      linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
+      linkAccessRules: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
       workLocations:
         "Place staff/vendor work spots on the map. Sim routes staff and vendors here without creating nested zones.",
@@ -2639,7 +2639,7 @@
 
     renderZoneEditor();
     if (accessTool === "rfidDevices" && typeof renderAccessRfidList === "function") renderAccessRfidList();
-    else if (typeof renderAccessRfidList !== "function") renderPortalEditor();
+    else if (typeof renderAccessRfidList !== "function") renderScannerAccessEditor();
     renderWorkLocationSection();
   }
 
@@ -2694,9 +2694,9 @@
     document.getElementById("editZoneOpacity")?.addEventListener("change", syncEditPreview);
   }
 
-  function renderPortalEditor() {
+  function renderScannerAccessEditor() {
     const gatePanel = document.getElementById("gateRulesPanel");
-    const fallback = document.getElementById("accessPortalEditor");
+    const fallback = document.getElementById("accessRulesEditor");
     const editor = gatePanel || fallback;
     if (!editor) return;
     if (gatePanel && fallback) fallback.innerHTML = "";
@@ -2728,13 +2728,13 @@
 
     const rulesBody = `
         <label>Zone A (from / outside)</label>
-        <select id="portalZoneA">${zoneOptions(true)}</select>
+        <select id="accessRulesZoneA">${zoneOptions(true)}</select>
         <label>Zone B (to / inside)</label>
-        <select id="portalZoneB">${zoneOptions(true)}</select>
+        <select id="accessRulesZoneB">${zoneOptions(true)}</select>
         <label>Attached barrier segment</label>
-        <select id="portalBarrier">${barrierOptions}</select>
+        <select id="accessRulesBarrier">${barrierOptions}</select>
         <label>Direction</label>
-        <select id="portalDirection">
+        <select id="accessRulesDirection">
           <option value="bidirectional">Bidirectional</option>
           <option value="a_to_b">A → B only</option>
           <option value="b_to_a">B → A only</option>
@@ -2743,24 +2743,24 @@
         <div class="row">${classes
           .map(
             (c) =>
-              `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="portalClass" value="${c}" ${
+              `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="accessRulesClass" value="${c}" ${
                 allowed.has(c) ? "checked" : ""
               }/> ${zoneLabel(c)}</label>`
           )
           .join("")}</div>
         <div class="row" style="margin-top:10px">
-          <button class="primary" onclick="event.stopPropagation(); savePortalAccess()">Save Rules</button>
-          <button onclick="event.stopPropagation(); snapPortalToBarrier()">Snap Onto Fence (create entry)</button>
+          <button class="primary" onclick="event.stopPropagation(); saveScannerAccessRules()">Save Rules</button>
+          <button onclick="event.stopPropagation(); snapScannerToBarrier()">Snap Onto Fence (create entry)</button>
         </div>`;
 
     editor.innerHTML = gatePanel
       ? rulesBody
       : `<div class="card selected"><h3>${escapeHtml(gate.name)} access rules</h3>${rulesBody}</div>`;
 
-    document.getElementById("portalZoneA").value = gate.zone_a_id || "";
-    document.getElementById("portalZoneB").value = gate.zone_b_id || "";
-    document.getElementById("portalBarrier").value = gate.barrier_id || "";
-    document.getElementById("portalDirection").value = gate.direction || "bidirectional";
+    document.getElementById("accessRulesZoneA").value = gate.zone_a_id || "";
+    document.getElementById("accessRulesZoneB").value = gate.zone_b_id || "";
+    document.getElementById("accessRulesBarrier").value = gate.barrier_id || "";
+    document.getElementById("accessRulesDirection").value = gate.direction || "bidirectional";
     updateAccessMapPanel();
   }
 
@@ -2771,8 +2771,8 @@
     selectedZoneId = null;
     selectedPathId = null;
     selectedQueueId = null;
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     syncAccessToolPanels();
     renderAccessLists();
     drawAccessLayers();
@@ -2786,8 +2786,8 @@
     selectedBarrierId = null;
     selectedPathId = null;
     selectedQueueId = null;
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     const zone = accessZones.find((z) => z.id === id);
     if (zone) {
       const parsed = parseRgbaColor(zone.fill_color || ZONE_COLORS[zone.zone_class] || ZONE_COLORS.ga);
@@ -2888,9 +2888,9 @@
     }
   };
 
-  window.selectAccessPortal = function (id) {
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+  window.selectAccessScanner = function (id) {
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     if (typeof selectGate === "function") selectGate(id);
     setAccessTool("rfidDevices");
     renderAccessLists();
@@ -3162,9 +3162,9 @@
     setStatus(`Saved default fill color for ${zoneLabel(cls)}.`);
   };
 
-  window.resetPortalFenceHeadingPreview = function () {
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+  window.resetScannerFenceHeadingPreview = function () {
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     updateAccessMapPanel();
     refreshGateSnapGraphics();
     setStatus("Reset scanner orientation preview to saved values.");
@@ -3172,9 +3172,9 @@
 
   function syncFenceHeadingControls(heading) {
     const h = Math.round(Number(heading) || 0);
-    const deg = document.getElementById("accessPortalOrientDeg");
+    const deg = document.getElementById("accessScannerOrientDeg");
     if (deg) deg.textContent = `${h}°`;
-    const sidebar = document.getElementById("mapPortalFenceHeading");
+    const sidebar = document.getElementById("mapScannerFenceHeading");
     if (sidebar && document.activeElement !== sidebar) sidebar.value = String(h);
     const editSlider = document.getElementById("editGateFenceHeading");
     if (editSlider && document.activeElement !== editSlider) editSlider.value = String(h);
@@ -3185,58 +3185,58 @@
   }
 
   window.syncGateFenceHeadingPreview = function (val) {
-    portalHeadingPreview = Number(val);
-    syncFenceHeadingControls(portalHeadingPreview);
+    scannerHeadingPreview = Number(val);
+    syncFenceHeadingControls(scannerHeadingPreview);
     refreshGateSnapGraphics();
   };
 
   window.syncNewGateFenceHeadingPreview = function (val) {
-    portalHeadingPreview = Number(val);
-    syncFenceHeadingControls(portalHeadingPreview);
+    scannerHeadingPreview = Number(val);
+    syncFenceHeadingControls(scannerHeadingPreview);
     refreshGateSnapGraphics();
   };
 
-  window.togglePortalFlowFlip = function () {
+  window.toggleScannerFlowFlip = function () {
     if (selectedKind !== "gate" || !selectedId) return;
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     if (!gate) return;
     const current = gateFlowFlipped(gate);
-    portalFlowFlipPreview = !current;
-    syncPortalFlowFlipButton(gate);
+    scannerFlowFlipPreview = !current;
+    syncScannerFlowFlipButton(gate);
     drawAccessLayers();
-    setStatus(`Flow direction preview ${portalFlowFlipPreview ? "flipped" : "restored"}. Click Save to persist.`);
+    setStatus(`Flow direction preview ${scannerFlowFlipPreview ? "flipped" : "restored"}. Click Save to persist.`);
   };
 
-  window.savePortalFenceHeading = async function () {
+  window.saveScannerFenceHeading = async function () {
     if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
-    const heading = parseInt(document.getElementById("mapPortalFenceHeading")?.value || "0", 10);
+    const heading = parseInt(document.getElementById("mapScannerFenceHeading")?.value || "0", 10);
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     const flowFlipped = gate ? gateFlowFlipped(gate) : false;
     const updated = await api(`/events/${getDashEvent().id}/scanners/${selectedId}`, {
       method: "PUT",
       body: JSON.stringify({
         fence_heading_deg: heading,
-        portal_flow_flipped: flowFlipped,
+        flow_flipped: flowFlipped,
         updated_by: "dash_access",
       }),
     });
     const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
     if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     renderAccessLists();
     updateAccessMapPanel();
     refreshGateSnapGraphics();
     setStatus(`Saved scanner orientation (heading ${heading}°, flow ${flowFlipped ? "flipped" : "normal"}).`);
   };
 
-  window.savePortalAccess = async function () {
+  window.saveScannerAccessRules = async function () {
     if (!getDashEvent() || selectedKind !== "gate" || !selectedId) return;
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     if (!gate) return;
-    const allowed = [...document.querySelectorAll(".portalClass:checked")].map((el) => el.value);
-    const barrierDropdown = document.getElementById("portalBarrier")?.value || "";
-    const headingEl = document.getElementById("mapPortalFenceHeading");
+    const allowed = [...document.querySelectorAll(".accessRulesClass:checked")].map((el) => el.value);
+    const barrierDropdown = document.getElementById("accessRulesBarrier")?.value || "";
+    const headingEl = document.getElementById("mapScannerFenceHeading");
     const fenceHeadingDeg = headingEl
       ? parseInt(headingEl.value || "0", 10)
       : Number(gate.fence_heading_deg ?? gate.fenceHeadingDeg ?? 0);
@@ -3245,10 +3245,10 @@
       {
         method: "PUT",
         body: JSON.stringify({
-          zone_a_id: document.getElementById("portalZoneA").value || null,
-          zone_b_id: document.getElementById("portalZoneB").value || null,
+          zone_a_id: document.getElementById("accessRulesZoneA").value || null,
+          zone_b_id: document.getElementById("accessRulesZoneB").value || null,
           barrier_id: barrierDropdown || gate.barrier_id || null,
-          direction: document.getElementById("portalDirection").value,
+          direction: document.getElementById("accessRulesDirection").value,
           allowed_classes: allowed,
           map_x: gate.map_x ?? gate.mapX,
           map_y: gate.map_y ?? gate.mapY,
@@ -3261,8 +3261,8 @@
     );
     const idx = (getDashGates() || []).findIndex((g) => g.id === selectedId);
     if (idx >= 0 && typeof gates !== "undefined") gates[idx] = updated;
-    portalHeadingPreview = null;
-    portalFlowFlipPreview = null;
+    scannerHeadingPreview = null;
+    scannerFlowFlipPreview = null;
     syncFenceHeadingControls(updated.fence_heading_deg ?? updated.fenceHeadingDeg ?? fenceHeadingDeg);
     renderAccessLists();
     updateAccessMapPanel();
@@ -3271,7 +3271,7 @@
     setStatus("Saved scanner access rules.");
   };
 
-  window.snapPortalToBarrier = async function () {
+  window.snapScannerToBarrier = async function () {
     if (selectedKind !== "gate" || !selectedId) return;
     const gate = (getDashGates() || []).find((g) => g.id === selectedId);
     if (!gate) return;
@@ -3279,8 +3279,8 @@
       const result = await commitScannerPlacement(selectedId, gate.map_x, gate.map_y);
       if (!result) return;
       if (result.place.snapped) {
-        document.getElementById("portalBarrier").value = result.place.barrier_id;
-        portalHeadingPreview = result.place.fence_heading_deg;
+        document.getElementById("accessRulesBarrier").value = result.place.barrier_id;
+        scannerHeadingPreview = result.place.fence_heading_deg;
         syncFenceHeadingControls(result.place.fence_heading_deg);
         renderAccessLists();
         updateAccessMapPanel();
@@ -3435,8 +3435,8 @@
       const origSelectGate = selectGate;
       selectGate = function (id) {
         origSelectGate(id);
-        portalHeadingPreview = null;
-        portalFlowFlipPreview = null;
+        scannerHeadingPreview = null;
+        scannerFlowFlipPreview = null;
         if (typeof currentTab !== "undefined" && currentTab === "access") {
           renderAccessLists();
           updateAccessMapPanel();
@@ -3639,11 +3639,11 @@
       el.addEventListener("change", () => setAccessLayer(key, el.checked));
     });
 
-    const mapHeadingSlider = document.getElementById("mapPortalFenceHeading");
+    const mapHeadingSlider = document.getElementById("mapScannerFenceHeading");
     if (mapHeadingSlider) {
       mapHeadingSlider.addEventListener("input", () => {
-        portalHeadingPreview = Number(mapHeadingSlider.value);
-        syncFenceHeadingControls(portalHeadingPreview);
+        scannerHeadingPreview = Number(mapHeadingSlider.value);
+        syncFenceHeadingControls(scannerHeadingPreview);
         refreshGateSnapGraphics();
       });
     }
@@ -3667,7 +3667,7 @@
   window.setAccessLayer = setAccessLayer;
   window.updateAccessMapPanel = updateAccessMapPanel;
 
-  window.renderPortalEditor = renderPortalEditor;
+  window.renderScannerAccessEditor = renderScannerAccessEditor;
   window.loadAccessLayout = loadAccessLayout;
   window.drawAccessLayers = drawAccessLayers;
   window.setAccessTool = setAccessTool;

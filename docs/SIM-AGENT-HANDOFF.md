@@ -31,7 +31,7 @@ Sibling repos — not a monorepo.
 - **Schema v2** sim-layout (`sim_layout.py`)
 - **Tile-painted barricades** — drag-paint tiles in Dash (`static/dash/access-control.js`)
 - **Queue polylines** — drawn on vertices, cyan in sim
-- **Gates/scanners** — portal flow heading, approach/inside standpoints computed at sim load
+- **Gates/scanners** — scanner flow heading, approach/inside standpoints computed at sim load
 - `geometry.py` — `rasterize_walls()`, `navmesh_to_bytes()` (0=walkable, 1=blocked)
 - Survey paths API exists (`survey_paths`) — could seed path painting later
 
@@ -40,7 +40,7 @@ Sibling repos — not a monorepo.
 - **Three movement layers** (fragile handoffs):
   1. Grid pathfind (`choose_next_cell`) when walking toward goal
   2. Queue follow mode (polyline pull + `follow_queue_step`) when near drawn queue
-  3. Portal scan queue (`try_join_scan_queue` → `Queued` → `Scanning` → `finish_scan`)
+  3. Scanner scan queue (`try_join_scan_queue` → `Queued` → `Scanning` → `finish_scan`)
 - **Fixed 30 Hz sim tick** (`SIM_DT`), decoupled from render FPS
 - **Perf toggles** — heatmap/labels off by default; pathfind budget 15k tiles / 32 agents per tick
 - **No tile occupancy / collision** yet (`ENABLE_AGENT_COLLISION = false`)
@@ -49,7 +49,7 @@ Sibling repos — not a monorepo.
 
 ## Known bugs (partially fixed, may persist)
 
-1. **Queue head / scan-in** — guests stuck before scanner when queue vertex sits on barrier boundary. Fix direction: `scan_join_point()` uses portal **approach** standoff, not raw polyline end.
+1. **Queue head / scan-in** — guests stuck before scanner when queue vertex sits on barrier boundary. Fix direction: `scan_join_point()` uses scanner **approach** standoff, not raw polyline end.
 2. **Top-right approach** — guests path to queue tail instead of nearest queue point; bounce along walls from interpolate+snap. Fix direction: route to nearest polyline point, `try_step_toward` for grid steps (no per-step `snap_norm_to_walkable`).
 3. **Post-scan wall riding** — `zone_interior_goal` now marches from entry toward zone centroid (not random angle from center).
 4. **Performance at ~100 guests** — was laggy due to heatmap draw, FPS-tied sim, per-tick clones; largely mitigated, not RCT-scale yet.
@@ -118,7 +118,7 @@ See conversation for full comparison. **User direction:** move toward RCT model.
 |------|---------|
 | `src/pathfinding/peep_nav.rs` | RCT-style `choose_next_cell` |
 | `src/pathfinding/mod.rs` | `NavGrid`, walkability |
-| `src/sim/mod.rs` | Agents, portals, queues, movement, perf |
+| `src/sim/mod.rs` | Agents, scanners, queues, movement, perf |
 | `src/render/mod.rs` | Map, agents, heatmap, overlays |
 | `src/app.rs` | UI, fixed sim tick loop |
 | `src/layout/mod.rs` | SimLayout deserialization |

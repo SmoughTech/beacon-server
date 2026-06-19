@@ -53,7 +53,7 @@ def register_sim_layout(
             ).fetchall()
             gate_rows = conn.execute(
                 """
-                SELECT * FROM wrstops_gates
+                SELECT * FROM scanners
                 WHERE event_id = ?
                 ORDER BY name COLLATE NOCASE ASC
                 """,
@@ -129,7 +129,6 @@ def register_sim_layout(
             },
             "surface": build_surface_payload(surface_grid),
             "scanner_graph": scanner_graph,
-            "portal_graph": scanner_graph,
             "generated_at": now_iso(),
         }
 

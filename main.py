@@ -20,8 +20,7 @@ from access_control import (
     spawn_point_row_to_dict,
     zone_row_to_dict,
 )
-
-enrich_wrstops_gate_dict = enrich_scanner_gate_dict
+from scanners_db import SCANNERS_TABLE, migrate_scanners_schema
 from sim_engine import register_sim_engine
 from sim_layout import register_sim_layout
 
@@ -144,7 +143,7 @@ class ScannerCreate(BaseModel):
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default="NORMAL", max_length=40)
     fence_heading_deg: Optional[float] = Field(default=0.0, ge=0.0, lt=360.0)
-    portal_flow_flipped: Optional[bool] = Field(default=False)
+    flow_flipped: Optional[bool] = Field(default=False)
     updated_by: Optional[str] = "android_siteops"
 
 
@@ -161,15 +160,8 @@ class ScannerUpdate(BaseModel):
     ip_address: Optional[str] = Field(default=None, max_length=80)
     override_status: Optional[str] = Field(default=None, max_length=40)
     fence_heading_deg: Optional[float] = Field(default=None, ge=0.0, lt=360.0)
-    portal_flow_flipped: Optional[bool] = None
+    flow_flipped: Optional[bool] = None
     updated_by: Optional[str] = "android_siteops"
-
-
-# Legacy aliases for older clients
-WrstopsGateCreate = ScannerCreate
-WrstopsGateUpdate = ScannerUpdate
-
-
 
 
 class CalibrationAnchorCreate(BaseModel):
@@ -337,7 +329,7 @@ def normalize_fence_heading(value: Optional[float]) -> float:
         return 0.0
 
 
-def normalize_portal_flow_flipped(value) -> bool:
+def normalize_flow_flipped(value) -> bool:
     if value is None:
         return False
     if isinstance(value, bool):
@@ -355,8 +347,6 @@ def normalize_gate_device_type(value: Optional[str]) -> str:
         "reader": "scanner",
         "rfid": "scanner",
         "rfid_reader": "scanner",
-        "portal_reader": "scanner",
-        "portal": "scanner",
         "phone": "handheld",
         "cellphone": "handheld",
         "mobile": "handheld",
@@ -374,10 +364,35 @@ def public_device_type(value: Optional[str]) -> str:
     return normalize_gate_device_type(value)
 
 
-def scanner_gate_row_to_dict(row: sqlite3.Row) -> dict:
+def _scanner_flow_flipped(row: sqlite3.Row) -> bool:
+    keys = row.keys()
+    if "flow_flipped" in keys:
+        return normalize_flow_flipped(row["flow_flipped"])
+    return False
+
+
+def query_scanner_rows(event_id: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT *
+            FROM {SCANNERS_TABLE}
+            WHERE event_id = ?
+            ORDER BY name COLLATE NOCASE ASC
+            """,
+            (event_id,),
+        ).fetchall()
+
+
+def map_overview_scanner_dict(row: sqlite3.Row) -> dict:
+    """Slim scanner payload for Android map overview (no access-control fields)."""
     device_type = public_device_type(
         row["device_type"] if "device_type" in row.keys() else "scanner"
     )
+    fence_heading_deg = normalize_fence_heading(
+        row["fence_heading_deg"] if "fence_heading_deg" in row.keys() else 0.0
+    )
+    flow_flipped = _scanner_flow_flipped(row)
     return {
         "id": row["id"],
         "event_id": row["event_id"],
@@ -386,7 +401,65 @@ def scanner_gate_row_to_dict(row: sqlite3.Row) -> dict:
         "deviceType": device_type,
         "map_x": row["map_x"],
         "map_y": row["map_y"],
-        # Android compatibility aliases.
+        "mapX": row["map_x"],
+        "mapY": row["map_y"],
+        "latitude": row["latitude"],
+        "longitude": row["longitude"],
+        "accuracy_meters": row["accuracy_meters"],
+        "scan_count": row["scan_count"],
+        "connection_status": row["connection_status"],
+        "ip_address": row["ip_address"],
+        "override_status": row["override_status"],
+        "fence_heading_deg": fence_heading_deg,
+        "fenceHeadingDeg": fence_heading_deg,
+        "flow_flipped": flow_flipped,
+        "flowFlipped": flow_flipped,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+def query_calibration_anchors_for_event(event_id: str) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM map_calibration_anchors
+            WHERE event_id = ?
+            ORDER BY created_at ASC
+            """,
+            (event_id,),
+        ).fetchall()
+    return [calibration_anchor_row_to_dict(row) for row in rows]
+
+
+def build_map_overview(event_id: str) -> dict:
+    get_event_config(event_id)
+    scanners = [map_overview_scanner_dict(row) for row in query_scanner_rows(event_id)]
+    return {
+        "schema_version": 1,
+        "profile": "android_field_map",
+        "event": get_event_config(event_id),
+        "scanners": scanners,
+        "pois": query_pois_for_event(event_id),
+        "calibration_anchors": query_calibration_anchors_for_event(event_id),
+    }
+
+
+def scanner_gate_row_to_dict(row: sqlite3.Row) -> dict:
+    device_type = public_device_type(
+        row["device_type"] if "device_type" in row.keys() else "scanner"
+    )
+    flow_flipped = _scanner_flow_flipped(row)
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "name": row["name"],
+        "device_type": device_type,
+        "deviceType": device_type,
+        "map_x": row["map_x"],
+        "map_y": row["map_y"],
         "mapX": row["map_x"],
         "mapY": row["map_y"],
         "latitude": row["latitude"],
@@ -405,17 +478,10 @@ def scanner_gate_row_to_dict(row: sqlite3.Row) -> dict:
         "fenceHeadingDeg": normalize_fence_heading(
             row["fence_heading_deg"] if "fence_heading_deg" in row.keys() else 0.0
         ),
-        "portal_flow_flipped": normalize_portal_flow_flipped(
-            row["portal_flow_flipped"] if "portal_flow_flipped" in row.keys() else 0
-        ),
-        "portalFlowFlipped": normalize_portal_flow_flipped(
-            row["portal_flow_flipped"] if "portal_flow_flipped" in row.keys() else 0
-        ),
+        "flow_flipped": flow_flipped,
+        "flowFlipped": flow_flipped,
         **enrich_scanner_gate_dict(row),
     }
-
-
-wrstops_gate_row_to_dict = scanner_gate_row_to_dict
 
 
 def calibration_anchor_row_to_dict(row: sqlite3.Row) -> dict:
@@ -595,54 +661,7 @@ def init_db():
             """
         )
 
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS wrstops_gates (
-                id TEXT PRIMARY KEY,
-                event_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                device_type TEXT NOT NULL DEFAULT 'portal',
-                map_x REAL NOT NULL,
-                map_y REAL NOT NULL,
-                latitude REAL,
-                longitude REAL,
-                accuracy_meters REAL,
-                scan_count INTEGER NOT NULL DEFAULT 0,
-                connection_status TEXT NOT NULL DEFAULT 'ONLINE',
-                ip_address TEXT,
-                override_status TEXT NOT NULL DEFAULT 'NORMAL',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by TEXT
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_wrstops_gates_event_id
-            ON wrstops_gates(event_id)
-            """
-        )
-
-        existing_gate_columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(wrstops_gates)").fetchall()
-        }
-
-        if "latitude" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN latitude REAL")
-        if "longitude" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN longitude REAL")
-        if "accuracy_meters" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN accuracy_meters REAL")
-        if "device_type" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN device_type TEXT NOT NULL DEFAULT 'portal'")
-        if "fence_heading_deg" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN fence_heading_deg REAL NOT NULL DEFAULT 0")
-        if "portal_flow_flipped" not in existing_gate_columns:
-            conn.execute("ALTER TABLE wrstops_gates ADD COLUMN portal_flow_flipped INTEGER NOT NULL DEFAULT 0")
-
+        migrate_scanners_schema(conn)
 
         conn.execute(
             """
@@ -1028,7 +1047,7 @@ def health():
     with get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS count FROM pois").fetchone()["count"]
         beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
-        scanner_count = conn.execute("SELECT COUNT(*) AS count FROM wrstops_gates").fetchone()["count"]
+        scanner_count = conn.execute(f"SELECT COUNT(*) AS count FROM {SCANNERS_TABLE}").fetchone()["count"]
         wifi_sweep_count = conn.execute("SELECT COUNT(*) AS count FROM wifi_sweeps").fetchone()["count"]
 
     return {
@@ -1073,12 +1092,23 @@ def get_event(event_id: str):
     return get_event_config(event_id)
 
 
+@app.get("/events/{event_id}/map-overview")
+def get_map_overview(event_id: str):
+    """Lightweight map bundle for Android / field apps — scanners, POIs, anchors only."""
+    return build_map_overview(event_id)
+
+
+@app.get("/events/{event_id}/site-overview", include_in_schema=False)
+def get_site_overview_legacy(event_id: str):
+    return get_map_overview(event_id)
+
+
 register_sim_layout(
     app,
     get_connection,
     now_iso,
     get_event_config,
-    wrstops_gate_row_to_dict,
+    scanner_gate_row_to_dict,
     calibration_anchor_row_to_dict,
 )
 
@@ -1088,7 +1118,7 @@ register_sim_engine(
     get_event_config,
     barrier_row_to_dict,
     zone_row_to_dict,
-    wrstops_gate_row_to_dict,
+    scanner_gate_row_to_dict,
     queue_row_to_dict,
     path_row_to_dict,
     spawn_point_row_to_dict,
@@ -1147,9 +1177,9 @@ DASH_HTML = r'''
     input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:#07101b;color:var(--text);padding:10px;outline:none} textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px} label{display:block;font-size:12px;color:var(--muted);margin:8px 0 5px}
     .app{max-width:1500px;margin:0 auto;padding:18px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}.brand h1{margin:0;font-size:30px;letter-spacing:.05em}.brand p{margin:4px 0 0;color:var(--muted)}
     .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}
-    .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}.dashShell{display:grid;grid-template-columns:minmax(240px,260px) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1100px){.dashShell{grid-template-columns:1fr}}.dashMain{min-width:0}.dashSidebar{position:sticky;top:18px;min-width:240px}.dashSidebar .panelBody{overflow:visible}.dashLayerList{display:flex;flex-direction:column;gap:6px}.dashLayerItem{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;color:#d8edf8;white-space:nowrap}.dashLayerItem input[type=checkbox]{width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;flex:0 0 18px;accent-color:var(--green)}.accessPortalOrient{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessPortalOrient h4{margin:0 0 6px;font-size:14px;color:#b3e5fc}.accessPortalOrient input[type=range]{padding:0;margin:6px 0;width:100%}.accessPortalOrientDeg{color:#64b5f6;font-weight:700}.flowFlipBtn{width:100%;margin:4px 0 8px;text-align:center;font-size:13px}.flowFlipBtn.active{outline:2px solid #ffb74d;background:#3d2e14;border-color:#ffb74d}.accessScannerScale{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessScannerScale label{display:flex;justify-content:space-between;align-items:center;margin:0 0 6px;font-size:12px;color:var(--muted)}.accessScannerScale input[type=range]{padding:0;width:100%}.gateFenceLine{stroke:#64b5f6;stroke-width:2.5;stroke-linecap:round;opacity:.9;pointer-events:none}.gateSnapSvgDot{fill:#64b5f6;stroke:#fff;stroke-width:1.2;pointer-events:none}.gateSnapSvgDot.selected{fill:#6df7a7}
+    .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}.dashShell{display:grid;grid-template-columns:minmax(240px,260px) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1100px){.dashShell{grid-template-columns:1fr}}.dashMain{min-width:0}.dashSidebar{position:sticky;top:18px;min-width:240px}.dashSidebar .panelBody{overflow:visible}.dashLayerList{display:flex;flex-direction:column;gap:6px}.dashLayerItem{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;color:#d8edf8;white-space:nowrap}.dashLayerItem input[type=checkbox]{width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;flex:0 0 18px;accent-color:var(--green)}.accessScannerOrient{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessScannerOrient h4{margin:0 0 6px;font-size:14px;color:#b3e5fc}.accessScannerOrient input[type=range]{padding:0;margin:6px 0;width:100%}.accessScannerOrientDeg{color:#64b5f6;font-weight:700}.flowFlipBtn{width:100%;margin:4px 0 8px;text-align:center;font-size:13px}.flowFlipBtn.active{outline:2px solid #ffb74d;background:#3d2e14;border-color:#ffb74d}.accessScannerScale{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessScannerScale label{display:flex;justify-content:space-between;align-items:center;margin:0 0 6px;font-size:12px;color:var(--muted)}.accessScannerScale input[type=range]{padding:0;width:100%}.gateFenceLine{stroke:#64b5f6;stroke-width:2.5;stroke-linecap:round;opacity:.9;pointer-events:none}.gateSnapSvgDot{fill:#64b5f6;stroke:#fff;stroke-width:1.2;pointer-events:none}.gateSnapSvgDot.selected{fill:#6df7a7}
     .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
-    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapStage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;-webkit-user-drag:none;user-drag:none;pointer-events:none;-webkit-user-select:none;user-select:none}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.gate{overflow:visible;border-radius:4px;transform:translate(-50%,-50%) scale(var(--dash-scanner-scale,0.72));z-index:10;pointer-events:auto}.marker.gate.draggingGate{z-index:20}.gateSnapDot{position:absolute;width:4px;height:4px;border-radius:50%;background:#64b5f6;border:1px solid #fff;transform:translate(-50%,-50%);pointer-events:auto;box-shadow:0 0 2px rgba(0,0,0,.65);z-index:2}.gateSnapDot.selected{background:#6df7a7}.gateSnapDotHit{width:12px;height:12px;background:transparent;border:0;box-shadow:none}.mapPanLockBtn{position:absolute;top:10px;right:10px;z-index:12;width:36px;height:36px;padding:0;border-radius:10px;background:rgba(8,17,27,.9);border:1px solid var(--line);font-size:17px;line-height:1;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}.mapPanLockBtn.unlocked{background:rgba(21,58,90,.92)}.mapWrap.mapPanLocked{cursor:default}.gateDragHandle{position:absolute;left:calc(50% + 8px);top:calc(50% + 8px);width:11px;height:11px;border-radius:50%;background:#ffe082;border:2px solid #fff;transform:translate(-50%,-50%);cursor:grab;pointer-events:auto;z-index:4;box-shadow:0 1px 6px rgba(0,0,0,.45)}.gateDragHandle.dragging{cursor:grabbing;background:#6df7a7}.marker.gate.draggingGate{opacity:.88}.gateSnapDotHit::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;transform:translate(-50%,-50%);border-radius:50%;background:#64b5f6;border:1px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.65);pointer-events:none}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:16px;height:9px;background:#9c27b0;color:#fff;display:grid;place-items:center;font-size:8px;font-weight:900;border-radius:3px}.gate::after{content:'S'}.gate.handheld{width:12px;height:18px;border-radius:4px;background:#1565c0;font-size:7px}.gate.handheld::after{content:'H'}.gate.ipad{width:17px;height:13px;border-radius:4px;background:#00a884;font-size:7px}.gate.ipad::after{content:'I'}.gate.scanner,.gate.portal{width:18px;height:10px;border-radius:3px;background:#9c27b0}.gate.scanner::after,.gate.portal::after{content:'S'}.marker.simLoc{width:14px;height:14px;border-radius:4px;font-size:8px;font-weight:900;display:grid;place-items:center;color:#fff}.marker.simLoc.vendor{background:#ff9800}.marker.simLoc.staff{background:#42a5f5}.marker.simLoc::after{content:attr(data-sim-loc-icon)}.marker.simLoc.selected{outline:2px solid #ffe082}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;cursor:pointer;mix-blend-mode:screen;filter:blur(.2px);box-shadow:0 0 22px rgba(255,255,255,.08)}.deviceBlob.selected{outline:2px solid rgba(255,255,255,.9);outline-offset:4px;box-shadow:0 0 0 5px rgba(124,255,155,.18),0 0 30px rgba(124,255,155,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#f7fbff;font-size:12px;text-shadow:0 2px 6px #000,0 0 4px #000;pointer-events:none;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:2px 6px;line-height:1}.deviceBlobCard{position:absolute;transform:translate(-50%,0);background:rgba(6,16,27,.94);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:7px 9px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:auto;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard.selected{border-color:#7CFF9B;box-shadow:0 0 0 2px rgba(124,255,155,.25),0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard b{display:block;font-size:12px;margin-bottom:2px}.deviceSweepStat{font-variant-numeric:tabular-nums;color:#d8edf8}.deviceSweepModePill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;font-size:10px;color:var(--muted)}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.accessOverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}.mapWrap.accessPaintCursor,.mapWrap.accessPaintCursor .mapStage{cursor:crosshair}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
+    .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapStage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;-webkit-user-drag:none;user-drag:none;pointer-events:none;-webkit-user-select:none;user-select:none}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.gate{overflow:visible;border-radius:4px;transform:translate(-50%,-50%) scale(var(--dash-scanner-scale,0.72));z-index:10;pointer-events:auto}.marker.gate.draggingGate{z-index:20}.gateSnapDot{position:absolute;width:4px;height:4px;border-radius:50%;background:#64b5f6;border:1px solid #fff;transform:translate(-50%,-50%);pointer-events:auto;box-shadow:0 0 2px rgba(0,0,0,.65);z-index:2}.gateSnapDot.selected{background:#6df7a7}.gateSnapDotHit{width:12px;height:12px;background:transparent;border:0;box-shadow:none}.mapPanLockBtn{position:absolute;top:10px;right:10px;z-index:12;width:36px;height:36px;padding:0;border-radius:10px;background:rgba(8,17,27,.9);border:1px solid var(--line);font-size:17px;line-height:1;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}.mapPanLockBtn.unlocked{background:rgba(21,58,90,.92)}.mapWrap.mapPanLocked{cursor:default}.gateDragHandle{position:absolute;left:calc(50% + 8px);top:calc(50% + 8px);width:11px;height:11px;border-radius:50%;background:#ffe082;border:2px solid #fff;transform:translate(-50%,-50%);cursor:grab;pointer-events:auto;z-index:4;box-shadow:0 1px 6px rgba(0,0,0,.45)}.gateDragHandle.dragging{cursor:grabbing;background:#6df7a7}.marker.gate.draggingGate{opacity:.88}.gateSnapDotHit::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;transform:translate(-50%,-50%);border-radius:50%;background:#64b5f6;border:1px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.65);pointer-events:none}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:16px;height:9px;background:#9c27b0;color:#fff;display:grid;place-items:center;font-size:8px;font-weight:900;border-radius:3px}.gate::after{content:'S'}.gate.handheld{width:12px;height:18px;border-radius:4px;background:#1565c0;font-size:7px}.gate.handheld::after{content:'H'}.gate.ipad{width:17px;height:13px;border-radius:4px;background:#00a884;font-size:7px}.gate.ipad::after{content:'I'}.gate.scanner{width:18px;height:10px;border-radius:3px;background:#9c27b0}.gate.scanner::after{content:'S'}.marker.simLoc{width:14px;height:14px;border-radius:4px;font-size:8px;font-weight:900;display:grid;place-items:center;color:#fff}.marker.simLoc.vendor{background:#ff9800}.marker.simLoc.staff{background:#42a5f5}.marker.simLoc::after{content:attr(data-sim-loc-icon)}.marker.simLoc.selected{outline:2px solid #ffe082}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;cursor:pointer;mix-blend-mode:screen;filter:blur(.2px);box-shadow:0 0 22px rgba(255,255,255,.08)}.deviceBlob.selected{outline:2px solid rgba(255,255,255,.9);outline-offset:4px;box-shadow:0 0 0 5px rgba(124,255,155,.18),0 0 30px rgba(124,255,155,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#f7fbff;font-size:12px;text-shadow:0 2px 6px #000,0 0 4px #000;pointer-events:none;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:2px 6px;line-height:1}.deviceBlobCard{position:absolute;transform:translate(-50%,0);background:rgba(6,16,27,.94);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:7px 9px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:auto;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard.selected{border-color:#7CFF9B;box-shadow:0 0 0 2px rgba(124,255,155,.25),0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard b{display:block;font-size:12px;margin-bottom:2px}.deviceSweepStat{font-variant-numeric:tabular-nums;color:#d8edf8}.deviceSweepModePill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;font-size:10px;color:var(--muted)}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.accessOverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}.mapWrap.accessPaintCursor,.mapWrap.accessPaintCursor .mapStage{cursor:crosshair}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
     .pathSvgLine{stroke:#ffd166;stroke-width:5;stroke-linecap:round;fill:none;opacity:.78}.pathSvgLine.selected{stroke:#6df7a7;stroke-width:8;opacity:1}.accessSection{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}.accessSection>h3{margin:0 0 8px;font-size:15px}.accessToolPanel{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;padding:10px;margin:0 0 10px}.zoneColorSwatch{width:28px;height:28px;border-radius:8px;border:2px solid rgba(255,255,255,.45);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.35)}.zoneColorSwatch.active{outline:2px solid var(--green);outline-offset:2px}.zoneColorPreview{width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}.mapControls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(7,16,27,.72)}.mapControlGroup{display:flex;align-items:center;gap:10px;flex:1;min-width:min(100%,220px)}.mapControls label{margin:0;color:var(--muted);font-size:12px;white-space:nowrap}.mapControls input[type=range]{padding:0;flex:1;min-width:80px}.mapOpacityValue{min-width:42px;text-align:right;color:#b7d7ff;font-size:12px}.gateSection{margin:8px 0;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);overflow:hidden}.gateSection summary{cursor:pointer;padding:10px 12px;font-size:13px;font-weight:600;color:#b3e5fc;list-style:none;display:flex;align-items:center;justify-content:space-between}.gateSection summary::-webkit-details-marker{display:none}.gateSection summary::after{content:'▾';color:var(--muted);transition:transform .15s ease}.gateSection[open] summary::after{transform:rotate(180deg)}.gateSectionBody{padding:0 12px 12px}.dashSearch{display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;align-items:start;margin:0 0 14px}.dashSearch input{height:42px}.searchResults{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}.searchChip{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.06);padding:5px 9px;font-size:12px;cursor:pointer}.searchChip.active{outline:2px solid var(--green);background:rgba(124,255,155,.12)}.marker.searchHit{animation:beaconPulse 1.1s ease-in-out infinite;outline:4px solid var(--green);outline-offset:5px;z-index:40}@keyframes beaconPulse{0%,100%{box-shadow:0 0 0 0 rgba(124,255,155,.65),0 1px 8px rgba(0,0,0,.5)}50%{box-shadow:0 0 0 12px rgba(124,255,155,0),0 1px 8px rgba(0,0,0,.5)}}.hidden{display:none!important}
   </style>
 </head>
@@ -1158,7 +1188,7 @@ DASH_HTML = r'''
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
   <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="sim">Crowd Sim</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
-  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (2ft, 400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerSpawnPoints" checked> Spawn points</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessPortalOrient" class="accessPortalOrient hidden"><h4 id="accessPortalOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessPortalOrientDeg" id="accessPortalOrientDeg">0°</span></label><input id="mapPortalFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="portalFlowFlipBtn" class="flowFlipBtn" onclick="togglePortalFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="savePortalFenceHeading()">Save</button><button onclick="resetPortalFenceHeadingPreview()">Reset</button></div></div></div></aside>
+  <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> Tile grid (2ft, 400×225)</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerSpawnPoints" checked> Spawn points</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessScannerOrient" class="accessScannerOrient hidden"><h4 id="accessScannerOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessScannerOrientDeg" id="accessScannerOrientDeg">0°</span></label><input id="mapScannerFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="scannerFlowFlipBtn" class="flowFlipBtn" onclick="toggleScannerFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="saveScannerFenceHeading()">Save</button><button onclick="resetScannerFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
   <div class="dashSearch"><input id="dashSearchInput" placeholder="Search scanners, POIs, survey paths, anchors, device sweeps..." onkeydown="if(event.key==='Enter')dashSearch()" oninput="if(!this.value.trim())clearDashSearch()"><button class="primary" onclick="dashSearch()">Search</button><button class="ghost" onclick="clearDashSearch()">Clear</button><div id="dashSearchResults" class="searchResults"></div></div>
   <div class="layout">
@@ -1196,7 +1226,7 @@ DASH_HTML = r'''
           <button data-access-tool="placeSpawn" onclick="setAccessTool('placeSpawn')">Place Spawn</button>
           <button data-access-tool="drawQueue" onclick="setAccessTool('drawQueue')">Draw Queue</button>
           <button data-access-tool="fillZone" onclick="setAccessTool('fillZone')">Fill Zone</button>
-          <button data-access-tool="linkPortal" onclick="setAccessTool('linkPortal')">Access Rules</button>
+          <button data-access-tool="linkAccessRules" onclick="setAccessTool('linkAccessRules')">Access Rules</button>
           <button data-access-tool="rfidDevices" onclick="setAccessTool('rfidDevices')">Scanners</button><button data-access-tool="workLocations" onclick="setAccessTool('workLocations')">Work Locations</button>
         </div>
         <div id="accessRfidSection" class="hidden">
@@ -1292,7 +1322,7 @@ DASH_HTML = r'''
           <div class="list" id="accessZoneList"></div>
         </div>
         <p id="accessLayoutFooter" class="small hidden">Use the layer toggles on the left to hide map clutter. Select a scanner, then use the fence heading slider to rotate snap points.</p>
-        <div id="accessPortalEditor"></div>
+        <div id="accessRulesEditor"></div>
       </section>
     </div></div>
   </div>
@@ -1347,7 +1377,7 @@ document.addEventListener('click', ev=>{if(ev.target&&ev.target.closest&&ev.targ
 function gateDeviceType(g){return (g.device_type||g.deviceType||'scanner').toLowerCase()}
 function gateDeviceClass(g){const t=gateDeviceType(g); return (t==='handheld'||t==='ipad'||t==='scanner')?t:'scanner'}
 function gateDeviceLabel(g){const t=gateDeviceClass(g); return t==='handheld'?'Handheld':(t==='ipad'?'iPad':'Scanner')}
-function gateTypeOptions(selected){const v=(selected||'scanner').toLowerCase(); return `<option value="scanner" ${v==='scanner'||v==='portal'?'selected':''}>Scanner / reader box</option><option value="handheld" ${v==='handheld'?'selected':''}>Handheld</option><option value="ipad" ${v==='ipad'?'selected':''}>iPad</option>`}
+function gateTypeOptions(selected){const v=(selected||'scanner').toLowerCase(); return `<option value="scanner" ${v==='scanner'?'selected':''}>Scanner / reader box</option><option value="handheld" ${v==='handheld'?'selected':''}>Handheld</option><option value="ipad" ${v==='ipad'?'selected':''}>iPad</option>`}
 function drawBase(){clearOverlay(); pois.forEach(p=>marker(p.map_x,p.map_y,'poi',`${p.id} ${p.name}`,()=>selectPoi(p.id))); gates.forEach(g=>{const el=marker(g.map_x,g.map_y,'gate '+gateDeviceClass(g),`${g.id} ${g.name} ${gateDeviceLabel(g)}`,()=>selectGate(g.id)); el.dataset.gateId=g.id;}); mapAnchors.forEach(a=>marker(a.map_x,a.map_y,'anchor',`anchor ${a.id}`,()=>selectAnchor(a.id))); if(dataMode==='survey')drawSurveyPaths();}
 function mapXY(evt){const wrap=document.getElementById('mapWrap'); const rect=wrap.getBoundingClientRect(); const scale=getMapScale(); return {x:Math.max(0,Math.min(1,(evt.clientX-rect.left-mapPanX)/(rect.width*scale))), y:Math.max(0,Math.min(1,(evt.clientY-rect.top-mapPanY)/(rect.height*scale)))};}
 document.getElementById('mapWrap').addEventListener('mousemove',handleMapEdgeScroll);
@@ -1374,14 +1404,14 @@ async function postMessageBoard(){const name=document.getElementById('msgName').
 async function deleteMessageBoard(id){if(!confirm('Delete this message?'))return; await api(`/events/${currentEvent.id}/message-board/${id}`,{method:'DELETE'}); await loadMessageBoard(); setStatus('Deleted message.')}
 function selectGate(id){setSelected('gate',id); setTab('access', false); if(typeof setAccessTool==='function')setAccessTool('rfidDevices'); renderAccessRfidList(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); drawBase(); setStatus('Selected scanner.'); requestAnimationFrame(()=>{const card=document.getElementById('gate-'+id); if(card)card.scrollIntoView({block:'nearest',behavior:'smooth'});});}
 async function loadGates(){gates=await api(`/events/${currentEvent.id}/scanners`); renderAccessRfidList(); drawBase();}
-function renderAccessRfidList(){const list=document.getElementById('accessRfidList'); if(!list)return; const addCard=(selectedKind==='newGate')?newGateEditor():''; const gateCards=gates.map(g=>{const sel=selectedKind==='gate'&&selectedId===g.id; return `<div class="card ${sel?'selected':''}" id="gate-${g.id}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${gateDeviceLabel(g)} • ${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}${g.latitude!=null&&g.longitude!=null?'<br>GPS '+g.latitude+', '+g.longitude:''}</p>${sel?gateEditor(g):''}</div>`}).join(''); list.innerHTML=addCard+(gateCards||'<p class="muted">No scanners yet. Click + Scanner.</p>'); if(typeof renderPortalEditor==='function')renderPortalEditor();}
+function renderAccessRfidList(){const list=document.getElementById('accessRfidList'); if(!list)return; const addCard=(selectedKind==='newGate')?newGateEditor():''; const gateCards=gates.map(g=>{const sel=selectedKind==='gate'&&selectedId===g.id; return `<div class="card ${sel?'selected':''}" id="gate-${g.id}" onclick="selectGate('${g.id}')"><h3>${escapeHtml(g.name)}</h3><p>${gateDeviceLabel(g)} • ${escapeHtml(g.connection_status)} • scans ${g.scan_count} • map ${n3(g.map_x)}, ${n3(g.map_y)}${g.latitude!=null&&g.longitude!=null?'<br>GPS '+g.latitude+', '+g.longitude:''}</p>${sel?gateEditor(g):''}</div>`}).join(''); list.innerHTML=addCard+(gateCards||'<p class="muted">No scanners yet. Click + Scanner.</p>'); if(typeof renderScannerAccessEditor==='function')renderScannerAccessEditor();}
 function renderGates(){renderAccessRfidList();}
 function startAddGate(){setSelected('newGate','new'); setTab('access',false); if(typeof setAccessTool==='function')setAccessTool('rfidDevices'); else renderAccessRfidList(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); drawBase(); setStatus('Create a new scanner. Select it, then use the fence heading slider to align snap points.');}
-function newGateEditor(){return `<div class="card selected"><h3>Add Scanner</h3><p class="muted">Create a scanner, handheld, or tablet reader for ${escapeHtml(currentEvent.name)}.</p><label>Name</label><input id="newGateName" value="Scanner ${gates.length+1}"><label>Device Type</label><select id="newGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions('portal')}</select><div class="row"><div><label>Map X</label><input id="newGateMapX" value="0.5000"></div><div><label>Map Y</label><input id="newGateMapY" value="0.5000"></div></div><div class="row"><div><label>Latitude</label><input id="newGateLat" placeholder="optional"></div><div><label>Longitude</label><input id="newGateLng" placeholder="optional"></div></div><div class="row"><div><label>Scan Count</label><input id="newGateScans" value="0"></div><div><label>IP Address</label><input id="newGateIp" placeholder="optional"></div></div><div class="row"><div><label>Status</label><select id="newGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE">ONLINE</option><option value="OFFLINE">OFFLINE</option></select></div><div><label>Override</label><select id="newGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL">NORMAL</option><option value="OFFLINE">OFFLINE</option></select></div></div><label>Fence heading (°)</label><input id="newGateFenceHeading" type="range" min="0" max="359" value="0" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation(); syncNewGateFenceHeadingPreview(this.value)"><div class="small">Snap points sit on this fence line (0° = horizontal). Also adjustable in Map Layers sidebar.</div><div class="row"><button class="primary" onclick="event.stopPropagation(); createGate()">Create Device</button><button onclick="event.stopPropagation(); mapClickMode='newGate'; setStatus('Click the map to place the scanner.')">Place on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('newGateLat','newGateLng','newGateMapX','newGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('newGateMapX','newGateMapY','newGateLat','newGateLng')">Infer GPS from Map</button><button onclick="event.stopPropagation(); selectedKind=null; selectedId=null; renderAccessRfidList(); drawBase(); setStatus('Cancelled.')">Cancel</button></div></div>`}
+function newGateEditor(){return `<div class="card selected"><h3>Add Scanner</h3><p class="muted">Create a scanner, handheld, or tablet reader for ${escapeHtml(currentEvent.name)}.</p><label>Name</label><input id="newGateName" value="Scanner ${gates.length+1}"><label>Device Type</label><select id="newGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions('scanner')}</select><div class="row"><div><label>Map X</label><input id="newGateMapX" value="0.5000"></div><div><label>Map Y</label><input id="newGateMapY" value="0.5000"></div></div><div class="row"><div><label>Latitude</label><input id="newGateLat" placeholder="optional"></div><div><label>Longitude</label><input id="newGateLng" placeholder="optional"></div></div><div class="row"><div><label>Scan Count</label><input id="newGateScans" value="0"></div><div><label>IP Address</label><input id="newGateIp" placeholder="optional"></div></div><div class="row"><div><label>Status</label><select id="newGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE">ONLINE</option><option value="OFFLINE">OFFLINE</option></select></div><div><label>Override</label><select id="newGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL">NORMAL</option><option value="OFFLINE">OFFLINE</option></select></div></div><label>Fence heading (°)</label><input id="newGateFenceHeading" type="range" min="0" max="359" value="0" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation(); syncNewGateFenceHeadingPreview(this.value)"><div class="small">Snap points sit on this fence line (0° = horizontal). Also adjustable in Map Layers sidebar.</div><div class="row"><button class="primary" onclick="event.stopPropagation(); createGate()">Create Device</button><button onclick="event.stopPropagation(); mapClickMode='newGate'; setStatus('Click the map to place the scanner.')">Place on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('newGateLat','newGateLng','newGateMapX','newGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('newGateMapX','newGateMapY','newGateLat','newGateLng')">Infer GPS from Map</button><button onclick="event.stopPropagation(); selectedKind=null; selectedId=null; renderAccessRfidList(); drawBase(); setStatus('Cancelled.')">Cancel</button></div></div>`}
 async function createGate(){const lat=document.getElementById('newGateLat').value.trim(), lng=document.getElementById('newGateLng').value.trim(); const payload={name:document.getElementById('newGateName').value||'Scanner',device_type:document.getElementById('newGateDeviceType').value,map_x:parseFloat(document.getElementById('newGateMapX').value),map_y:parseFloat(document.getElementById('newGateMapY').value),scan_count:parseInt(document.getElementById('newGateScans').value||'0',10),connection_status:document.getElementById('newGateStatus').value,override_status:document.getElementById('newGateOverride').value,ip_address:document.getElementById('newGateIp').value||null,fence_heading_deg:parseInt(document.getElementById('newGateFenceHeading').value||'0',10),updated_by:'dash_gate_creator'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} if(!Number.isFinite(payload.map_x)||!Number.isFinite(payload.map_y)){setStatus('Enter valid map X/Y.'); return;} const created=await api(`/events/${currentEvent.id}/scanners`,{method:'POST',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/scanners`); setSelected('gate',created.id); setTab('access',false); if(typeof setAccessTool==='function')setAccessTool('rfidDevices'); renderAccessRfidList(); drawBase(); setStatus('Created scanner.');}
 function gateSection(title,body,open){return `<details class="gateSection" ${open?'open':''} onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"><summary onclick="event.stopPropagation()">${title}</summary><div class="gateSectionBody">${body}</div></details>`;}
-function gateEditor(g){const health=`<div class="row"><div><label>Status</label><select id="editGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div>`; const location=`<div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><label>Fence heading (°) <span id="editGateFenceHeadingDeg">${Math.round(g.fence_heading_deg||0)}°</span></label><input id="editGateFenceHeading" type="range" min="0" max="359" value="${Math.round(g.fence_heading_deg||0)}" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation(); syncGateFenceHeadingPreview(this.value)"><div class="small">Rotates snap points along the fence line. Also in Map Layers sidebar.</div><div class="row"><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move this scanner.')">Move on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('editGateLat','editGateLng','editGateMapX','editGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('editGateMapX','editGateMapY','editGateLat','editGateLng')">Infer GPS from Map</button></div>`; const rules=`<div id="gateRulesPanel"></div>`; return `<div onclick="event.stopPropagation()"><label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><label>Device Type</label><select id="editGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions(g.device_type||g.deviceType||'portal')}</select>${gateSection('Health',health,true)}${gateSection('Location',location,false)}${gateSection('Rules',rules,false)}<p class="small">Walk-through arrow: Map Layers panel.</p><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Device</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div></div>`;}
-async function saveGate(id){const lat=document.getElementById('editGateLat').value.trim(), lng=document.getElementById('editGateLng').value.trim(); const payload={name:document.getElementById('editGateName').value,device_type:document.getElementById('editGateDeviceType').value,map_x:parseFloat(document.getElementById('editGateMapX').value),map_y:parseFloat(document.getElementById('editGateMapY').value),scan_count:parseInt(document.getElementById('editGateScans').value||'0',10),connection_status:document.getElementById('editGateStatus').value,override_status:document.getElementById('editGateOverride').value,ip_address:document.getElementById('editGateIp').value,updated_by:'dash_gate_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} payload.fence_heading_deg=parseInt(document.getElementById('mapPortalFenceHeading')?.value||document.getElementById('editGateFenceHeading')?.value||'0',10); await api(`/events/${currentEvent.id}/scanners/${id}`,{method:'PUT',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/scanners`); setSelected('gate',id); renderAccessRfidList(); drawBase(); setStatus('Saved scanner.');}
+function gateEditor(g){const health=`<div class="row"><div><label>Status</label><select id="editGateStatus" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="ONLINE" ${g.connection_status==='ONLINE'?'selected':''}>ONLINE</option><option value="OFFLINE" ${g.connection_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div><div><label>Override</label><select id="editGateOverride" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()"><option value="NORMAL" ${g.override_status==='NORMAL'?'selected':''}>NORMAL</option><option value="OFFLINE" ${g.override_status==='OFFLINE'?'selected':''}>OFFLINE</option></select></div></div><div class="row"><div><label>Scan Count</label><input id="editGateScans" value="${g.scan_count??0}"></div><div><label>IP Address</label><input id="editGateIp" value="${escapeHtml(g.ip_address||'')}"></div></div>`; const location=`<div class="row"><div><label>Map X</label><input id="editGateMapX" value="${n4(g.map_x)}"></div><div><label>Map Y</label><input id="editGateMapY" value="${n4(g.map_y)}"></div></div><div class="row"><div><label>Latitude</label><input id="editGateLat" value="${g.latitude??''}"></div><div><label>Longitude</label><input id="editGateLng" value="${g.longitude??''}"></div></div><label>Fence heading (°) <span id="editGateFenceHeadingDeg">${Math.round(g.fence_heading_deg||0)}°</span></label><input id="editGateFenceHeading" type="range" min="0" max="359" value="${Math.round(g.fence_heading_deg||0)}" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" oninput="event.stopPropagation(); syncGateFenceHeadingPreview(this.value)"><div class="small">Rotates snap points along the fence line. Also in Map Layers sidebar.</div><div class="row"><button onclick="event.stopPropagation(); mapClickMode='moveGate'; setStatus('Click map to move this scanner.')">Move on Map</button><button onclick="event.stopPropagation(); inferMapFromGps('editGateLat','editGateLng','editGateMapX','editGateMapY')">Infer Map from GPS</button><button onclick="event.stopPropagation(); inferGpsFromMap('editGateMapX','editGateMapY','editGateLat','editGateLng')">Infer GPS from Map</button></div>`; const rules=`<div id="gateRulesPanel"></div>`; return `<div onclick="event.stopPropagation()"><label>Name</label><input id="editGateName" value="${escapeHtml(g.name)}"><label>Device Type</label><select id="editGateDeviceType" onpointerdown="event.stopPropagation()" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" onchange="event.stopPropagation()">${gateTypeOptions(g.device_type||g.deviceType||'scanner')}</select>${gateSection('Health',health,true)}${gateSection('Location',location,false)}${gateSection('Rules',rules,false)}<p class="small">Walk-through arrow: Map Layers panel.</p><div class="row"><button class="primary" onclick="event.stopPropagation(); saveGate('${g.id}')">Save Device</button><button class="danger" onclick="event.stopPropagation(); deleteGate('${g.id}')">Delete</button></div></div>`;}
+async function saveGate(id){const lat=document.getElementById('editGateLat').value.trim(), lng=document.getElementById('editGateLng').value.trim(); const payload={name:document.getElementById('editGateName').value,device_type:document.getElementById('editGateDeviceType').value,map_x:parseFloat(document.getElementById('editGateMapX').value),map_y:parseFloat(document.getElementById('editGateMapY').value),scan_count:parseInt(document.getElementById('editGateScans').value||'0',10),connection_status:document.getElementById('editGateStatus').value,override_status:document.getElementById('editGateOverride').value,ip_address:document.getElementById('editGateIp').value,updated_by:'dash_gate_editor'}; if(lat!==''&&lng!==''){payload.latitude=parseFloat(lat); payload.longitude=parseFloat(lng); payload.accuracy_meters=0;} payload.fence_heading_deg=parseInt(document.getElementById('mapScannerFenceHeading')?.value||document.getElementById('editGateFenceHeading')?.value||'0',10); await api(`/events/${currentEvent.id}/scanners/${id}`,{method:'PUT',body:JSON.stringify(payload)}); gates=await api(`/events/${currentEvent.id}/scanners`); setSelected('gate',id); renderAccessRfidList(); drawBase(); setStatus('Saved scanner.');}
 async function deleteGate(id){if(!confirm('Delete this scanner?'))return; await api(`/events/${currentEvent.id}/scanners/${id}`,{method:'DELETE'}); selectedKind=null; selectedId=null; await loadGates(); setStatus('Deleted scanner.');}
 function selectAnchor(id){setSelected('anchor',id); setTab('calibration'); loadAnchors().then(()=>setStatus('Selected calibration anchor.'));}
 async function loadAnchors(){mapAnchors=await api(`/events/${currentEvent.id}/calibration-anchors`); document.getElementById('anchorList').innerHTML=mapAnchors.map(a=>`<div class="card ${selectedKind==='anchor'&&selectedId===a.id?'selected':''}" onclick="selectAnchor('${a.id}')"><h3>Anchor</h3><p>map ${n4(a.map_x)}, ${n4(a.map_y)}<br>${a.latitude}, ${a.longitude}</p><button class="danger" onclick="event.stopPropagation(); deleteAnchor('${a.id}')">Delete</button></div>`).join('')||'<p class="muted">No anchors.</p>'; drawBase();}
@@ -1533,7 +1563,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.17.3"></script>
+<script src="/static/dash/access-control.js?v=3.18.0"></script>
 <script src="/static/dash/crowd-sim.js?v=1.7.0"></script>
 </body>
 </html>
@@ -2073,23 +2103,7 @@ def delete_quickfinder_beacon(code: str):
 
 @app.get("/events/{event_id}/scanners")
 def get_scanners(event_id: str):
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM wrstops_gates
-            WHERE event_id = ?
-            ORDER BY name COLLATE NOCASE ASC
-            """,
-            (event_id,),
-        ).fetchall()
-
-    return [scanner_gate_row_to_dict(row) for row in rows]
-
-
-@app.get("/events/{event_id}/wrstops-gates", include_in_schema=False)
-def get_wrstops_gates_legacy(event_id: str):
-    return get_scanners(event_id)
+    return [scanner_gate_row_to_dict(row) for row in query_scanner_rows(event_id)]
 
 
 @app.post("/events/{event_id}/scanners")
@@ -2104,10 +2118,10 @@ def create_scanner(event_id: str, payload: ScannerCreate):
 
     with get_connection() as conn:
         conn.execute(
-            """
-            INSERT INTO wrstops_gates (
+            f"""
+            INSERT INTO {SCANNERS_TABLE} (
                 id, event_id, name, device_type, map_x, map_y, latitude, longitude, accuracy_meters, scan_count,
-                connection_status, ip_address, override_status, fence_heading_deg, portal_flow_flipped,
+                connection_status, ip_address, override_status, fence_heading_deg, flow_flipped,
                 created_at, updated_at, updated_by
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2127,7 +2141,7 @@ def create_scanner(event_id: str, payload: ScannerCreate):
                 payload.ip_address,
                 override_status,
                 normalize_fence_heading(payload.fence_heading_deg),
-                1 if normalize_portal_flow_flipped(payload.portal_flow_flipped) else 0,
+                1 if normalize_flow_flipped(payload.flow_flipped) else 0,
                 timestamp,
                 timestamp,
                 payload.updated_by,
@@ -2136,23 +2150,18 @@ def create_scanner(event_id: str, payload: ScannerCreate):
         conn.commit()
 
         row = conn.execute(
-            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            f"SELECT * FROM {SCANNERS_TABLE} WHERE id = ? AND event_id = ?",
             (gate_id, event_id),
         ).fetchone()
 
     return scanner_gate_row_to_dict(row)
 
 
-@app.post("/events/{event_id}/wrstops-gates", include_in_schema=False)
-def create_wrstops_gate_legacy(event_id: str, payload: WrstopsGateCreate):
-    return create_scanner(event_id, payload)
-
-
 @app.put("/events/{event_id}/scanners/{gate_id}")
 def update_scanner(event_id: str, gate_id: str, payload: ScannerUpdate):
     with get_connection() as conn:
         existing = conn.execute(
-            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            f"SELECT * FROM {SCANNERS_TABLE} WHERE id = ? AND event_id = ?",
             (gate_id, event_id),
         ).fetchone()
 
@@ -2189,17 +2198,15 @@ def update_scanner(event_id: str, gate_id: str, payload: ScannerUpdate):
                 existing["fence_heading_deg"] if "fence_heading_deg" in existing.keys() else 0.0
             )
         )
-        portal_flow_flipped = (
-            normalize_portal_flow_flipped(payload.portal_flow_flipped)
-            if payload.portal_flow_flipped is not None
-            else normalize_portal_flow_flipped(
-                existing["portal_flow_flipped"] if "portal_flow_flipped" in existing.keys() else 0
-            )
+        flow_flipped = (
+            normalize_flow_flipped(payload.flow_flipped)
+            if payload.flow_flipped is not None
+            else _scanner_flow_flipped(existing)
         )
 
         conn.execute(
-            """
-            UPDATE wrstops_gates
+            f"""
+            UPDATE {SCANNERS_TABLE}
             SET
                 name = ?,
                 device_type = ?,
@@ -2213,7 +2220,7 @@ def update_scanner(event_id: str, gate_id: str, payload: ScannerUpdate):
                 ip_address = ?,
                 override_status = ?,
                 fence_heading_deg = ?,
-                portal_flow_flipped = ?,
+                flow_flipped = ?,
                 updated_at = ?,
                 updated_by = ?
             WHERE id = ? AND event_id = ?
@@ -2231,7 +2238,7 @@ def update_scanner(event_id: str, gate_id: str, payload: ScannerUpdate):
                 ip_address,
                 override_status or "NORMAL",
                 fence_heading_deg,
-                1 if portal_flow_flipped else 0,
+                1 if flow_flipped else 0,
                 now_iso(),
                 payload.updated_by,
                 gate_id,
@@ -2241,23 +2248,18 @@ def update_scanner(event_id: str, gate_id: str, payload: ScannerUpdate):
         conn.commit()
 
         row = conn.execute(
-            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            f"SELECT * FROM {SCANNERS_TABLE} WHERE id = ? AND event_id = ?",
             (gate_id, event_id),
         ).fetchone()
 
     return scanner_gate_row_to_dict(row)
 
 
-@app.put("/events/{event_id}/wrstops-gates/{gate_id}", include_in_schema=False)
-def update_wrstops_gate_legacy(event_id: str, gate_id: str, payload: WrstopsGateUpdate):
-    return update_scanner(event_id, gate_id, payload)
-
-
 @app.delete("/events/{event_id}/scanners/{gate_id}")
 def delete_scanner(event_id: str, gate_id: str):
     with get_connection() as conn:
         existing = conn.execute(
-            "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            f"SELECT * FROM {SCANNERS_TABLE} WHERE id = ? AND event_id = ?",
             (gate_id, event_id),
         ).fetchone()
 
@@ -2265,17 +2267,12 @@ def delete_scanner(event_id: str, gate_id: str):
             raise HTTPException(status_code=404, detail="Scanner not found")
 
         conn.execute(
-            "DELETE FROM wrstops_gates WHERE id = ? AND event_id = ?",
+            f"DELETE FROM {SCANNERS_TABLE} WHERE id = ? AND event_id = ?",
             (gate_id, event_id),
         )
         conn.commit()
 
     return {"deleted": True, "id": gate_id, "event_id": event_id}
-
-
-@app.delete("/events/{event_id}/wrstops-gates/{gate_id}", include_in_schema=False)
-def delete_wrstops_gate_legacy(event_id: str, gate_id: str):
-    return delete_scanner(event_id, gate_id)
 
 
 

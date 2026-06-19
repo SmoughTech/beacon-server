@@ -17,9 +17,9 @@ from tile_grid import (
     vertex_from_norm,
 )
 
-PORTAL_SNAP_DIST = 0.011
-PORTAL_VIRTUAL_WALL_EXTEND = 0.006
-PORTAL_GAP_HALF_WIDTH = 0.014
+SCANNER_SNAP_DIST = 0.011
+SCANNER_VIRTUAL_WALL_EXTEND = 0.006
+SCANNER_GAP_HALF_WIDTH = 0.014
 
 SURFACE_BLOCKED = 0
 SURFACE_WALKABLE = 1
@@ -50,27 +50,27 @@ def gate_on_barrier(gate: dict[str, Any]) -> bool:
     return bool(gate.get("barrier_id")) and gate.get("barrier_segment_index") is not None
 
 
-def portal_fence_line_heading(gate: dict[str, Any]) -> float:
+def scanner_fence_line_heading(gate: dict[str, Any]) -> float:
     fence = gate_fence_heading(gate)
     if gate_on_barrier(gate):
         return (fence + 90.0) % 360
     return fence
 
 
-def get_portal_snap_pair(gate: dict[str, Any]) -> dict[str, Any] | None:
+def get_scanner_snap_pair(gate: dict[str, Any]) -> dict[str, Any] | None:
     cx = gate.get("map_x", gate.get("mapX"))
     cy = gate.get("map_y", gate.get("mapY"))
     if cx is None or cy is None:
         return None
-    heading = portal_fence_line_heading(gate)
+    heading = scanner_fence_line_heading(gate)
     ux, uy = heading_unit_rad(heading)
     cx_f, cy_f = float(cx), float(cy)
     return {
         "gate_id": gate.get("id"),
         "center": {"x": cx_f, "y": cy_f},
         "heading": heading,
-        "a": {"x": cx_f - ux * PORTAL_SNAP_DIST, "y": cy_f - uy * PORTAL_SNAP_DIST, "side": "a"},
-        "b": {"x": cx_f + ux * PORTAL_SNAP_DIST, "y": cy_f + uy * PORTAL_SNAP_DIST, "side": "b"},
+        "a": {"x": cx_f - ux * SCANNER_SNAP_DIST, "y": cy_f - uy * SCANNER_SNAP_DIST, "side": "a"},
+        "b": {"x": cx_f + ux * SCANNER_SNAP_DIST, "y": cy_f + uy * SCANNER_SNAP_DIST, "side": "b"},
     }
 
 
@@ -230,7 +230,7 @@ def gate_segment_gaps(gate: dict[str, Any], a: dict[str, Any], b: dict[str, Any]
     seg_t = gate.get("barrier_segment_t")
     if seg_t is None:
         seg_t, _, _, _ = project_point_on_segment(a, b, float(cx), float(cy))
-    return [(float(seg_t), PORTAL_GAP_HALF_WIDTH)]
+    return [(float(seg_t), SCANNER_GAP_HALF_WIDTH)]
 
 
 def collect_gate_attachments(
@@ -247,8 +247,8 @@ def collect_gate_attachments(
     return attachments
 
 
-def add_portal_virtual_wall(grid: list[list[int]], gate: dict[str, Any]) -> None:
-    pair = get_portal_snap_pair(gate)
+def add_scanner_virtual_wall(grid: list[list[int]], gate: dict[str, Any]) -> None:
+    pair = get_scanner_snap_pair(gate)
     if pair is None:
         return
 
@@ -257,10 +257,10 @@ def add_portal_virtual_wall(grid: list[list[int]], gate: dict[str, Any]) -> None
             grid[gy][gx] = 1
 
     ux, uy = heading_unit_rad(pair["heading"])
-    ax = pair["a"]["x"] - ux * PORTAL_VIRTUAL_WALL_EXTEND
-    ay = pair["a"]["y"] - uy * PORTAL_VIRTUAL_WALL_EXTEND
-    bx = pair["b"]["x"] + ux * PORTAL_VIRTUAL_WALL_EXTEND
-    by = pair["b"]["y"] + uy * PORTAL_VIRTUAL_WALL_EXTEND
+    ax = pair["a"]["x"] - ux * SCANNER_VIRTUAL_WALL_EXTEND
+    ay = pair["a"]["y"] - uy * SCANNER_VIRTUAL_WALL_EXTEND
+    bx = pair["b"]["x"] + ux * SCANNER_VIRTUAL_WALL_EXTEND
+    by = pair["b"]["y"] + uy * SCANNER_VIRTUAL_WALL_EXTEND
     a = grid_from_norm(ax, ay)
     b = grid_from_norm(bx, by)
     draw_grid_line(grid, a[0], a[1], b[0], b[1], mark)
@@ -295,7 +295,7 @@ def rasterize_walls(
             draw_norm_segment_with_gaps(grid, a, b, gaps, mark)
 
     for gate in gates:
-        add_portal_virtual_wall(grid, gate)
+        add_scanner_virtual_wall(grid, gate)
 
     return grid
 
@@ -415,7 +415,7 @@ def build_scanner_graph(
         )
 
     for gate in gates:
-        pair = get_portal_snap_pair(gate)
+        pair = get_scanner_snap_pair(gate)
         if pair is None:
             continue
         gate_id = gate["id"]
@@ -447,7 +447,6 @@ def build_scanner_graph(
                     "from": from_id,
                     "to": to_id,
                     "via_scanner": via,
-                    "via_portal": via,
                     "allowed_classes": allowed,
                 }
             )
@@ -459,5 +458,3 @@ def build_scanner_graph(
 
     return {"nodes": nodes, "edges": edges}
 
-
-build_portal_graph = build_scanner_graph

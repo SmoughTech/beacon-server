@@ -10,6 +10,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from scanners_db import SCANNERS_TABLE
+
 ZONE_CLASSES = ("ga", "vip", "staff", "backstage", "vendor")
 BARRIER_TYPES = ("fence", "barricade", "wall", "rope")
 
@@ -410,7 +412,7 @@ def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
         allowed_classes = []
 
     fence_heading_deg = float(row["fence_heading_deg"] if "fence_heading_deg" in keys else 0.0) % 360
-    portal_flow_flipped = bool(row["portal_flow_flipped"] if "portal_flow_flipped" in keys else 0)
+    flow_flipped = bool(row["flow_flipped"] if "flow_flipped" in keys else 0)
 
     return {
         "zone_a_id": row["zone_a_id"] if "zone_a_id" in keys else None,
@@ -422,8 +424,8 @@ def enrich_scanner_gate_dict(row: sqlite3.Row) -> dict[str, Any]:
         "barrier_segment_t": row["barrier_segment_t"] if "barrier_segment_t" in keys else None,
         "fence_heading_deg": fence_heading_deg,
         "fenceHeadingDeg": fence_heading_deg,
-        "portal_flow_flipped": portal_flow_flipped,
-        "portalFlowFlipped": portal_flow_flipped,
+        "flow_flipped": flow_flipped,
+        "flowFlipped": flow_flipped,
     }
 
 
@@ -470,21 +472,21 @@ def init_access_control_db(conn: sqlite3.Connection) -> None:
         """
     )
 
-    gate_columns = {row["name"] for row in conn.execute("PRAGMA table_info(wrstops_gates)").fetchall()}
+    gate_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({SCANNERS_TABLE})").fetchall()}
     if "zone_a_id" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN zone_a_id TEXT")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN zone_a_id TEXT")
     if "zone_b_id" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN zone_b_id TEXT")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN zone_b_id TEXT")
     if "allowed_classes" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN allowed_classes TEXT")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN allowed_classes TEXT")
     if "direction" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN direction TEXT NOT NULL DEFAULT 'bidirectional'")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN direction TEXT NOT NULL DEFAULT 'bidirectional'")
     if "barrier_id" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_id TEXT")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN barrier_id TEXT")
     if "barrier_segment_index" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_segment_index INTEGER")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN barrier_segment_index INTEGER")
     if "barrier_segment_t" not in gate_columns:
-        conn.execute("ALTER TABLE wrstops_gates ADD COLUMN barrier_segment_t REAL")
+        conn.execute(f"ALTER TABLE {SCANNERS_TABLE} ADD COLUMN barrier_segment_t REAL")
 
     barrier_columns = {row["name"] for row in conn.execute("PRAGMA table_info(access_barriers)").fetchall()}
     if "closed" not in barrier_columns:
@@ -690,7 +692,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 (barrier_id, event_id),
             )
             conn.execute(
-                "UPDATE wrstops_gates SET barrier_id = NULL WHERE event_id = ? AND barrier_id = ?",
+                "UPDATE scanners SET barrier_id = NULL WHERE event_id = ? AND barrier_id = ?",
                 (event_id, barrier_id),
             )
             conn.commit()
@@ -803,7 +805,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.execute(
                 """
-                UPDATE wrstops_gates
+                UPDATE scanners
                 SET zone_a_id = CASE WHEN zone_a_id = ? THEN NULL ELSE zone_a_id END,
                     zone_b_id = CASE WHEN zone_b_id = ? THEN NULL ELSE zone_b_id END
                 WHERE event_id = ?
@@ -817,7 +819,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
     def update_scanner_access(event_id: str, gate_id: str, payload: ScannerAccessUpdate):
         with get_connection() as conn:
             existing = conn.execute(
-                "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                "SELECT * FROM scanners WHERE id = ? AND event_id = ?",
                 (gate_id, event_id),
             ).fetchone()
             if existing is None:
@@ -864,7 +866,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.execute(
                 """
-                UPDATE wrstops_gates
+                UPDATE scanners
                 SET zone_a_id = ?, zone_b_id = ?, allowed_classes = ?, direction = ?,
                     barrier_id = ?, barrier_segment_index = ?, barrier_segment_t = ?,
                     map_x = ?, map_y = ?, fence_heading_deg = ?,
@@ -890,7 +892,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
             )
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                "SELECT * FROM scanners WHERE id = ? AND event_id = ?",
                 (gate_id, event_id),
             ).fetchone()
 
@@ -917,10 +919,6 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
         }
         payload_dict.update(enrich_scanner_gate_dict(row))
         return payload_dict
-
-    @router.put("/events/{event_id}/wrstops-gates/{gate_id}/portal-access", include_in_schema=False)
-    def update_gate_portal_access_legacy(event_id: str, gate_id: str, payload: ScannerAccessUpdate):
-        return update_scanner_access(event_id, gate_id, payload)
 
     @router.get("/events/{event_id}/sim-locations")
     def list_sim_locations(event_id: str):
@@ -1031,7 +1029,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
         timestamp = now_iso()
         with get_connection() as conn:
             gate = conn.execute(
-                "SELECT id FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                "SELECT id FROM scanners WHERE id = ? AND event_id = ?",
                 (payload.gate_id, event_id),
             ).fetchone()
             if gate is None:
@@ -1072,7 +1070,7 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
                 raise HTTPException(status_code=404, detail="Queue not found")
             if payload.gate_id is not None:
                 gate = conn.execute(
-                    "SELECT id FROM wrstops_gates WHERE id = ? AND event_id = ?",
+                    "SELECT id FROM scanners WHERE id = ? AND event_id = ?",
                     (payload.gate_id, event_id),
                 ).fetchone()
                 if gate is None:
@@ -1337,5 +1335,3 @@ def register_access_control(app, get_connection: Callable, now_iso: Callable[[],
     app.include_router(router)
 
 
-GatePortalAccessUpdate = ScannerAccessUpdate
-enrich_wrstops_gate_dict = enrich_scanner_gate_dict
