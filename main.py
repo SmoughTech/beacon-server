@@ -1245,7 +1245,7 @@ DASH_HTML = r'''
         <div id="accessSectionSpawns" class="accessSection hidden">
           <h3>Spawn Points</h3>
           <div id="accessSpawnSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Click a painted path to snap a token spawn. Guests appear here and flow along the path direction.</p>
+            <p class="small" style="margin:0 0 8px">Hold on the map and drag over a painted path — a green S preview snaps to the nearest path tile. Release to place.</p>
             <div class="row">
               <div><label>Spawn name</label><input id="accessSpawnName" placeholder="Main entrance spawn" /></div>
               <div><label>Ticket class</label><select id="accessSpawnClass"><option value="ga">GA</option><option value="vip">VIP</option><option value="staff">Staff</option><option value="vendor">Vendor</option></select></div>
@@ -1532,7 +1532,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.16.1"></script>
+<script src="/static/dash/access-control.js?v=3.17.0"></script>
 <script src="/static/dash/crowd-sim.js?v=1.5.0"></script>
 </body>
 </html>

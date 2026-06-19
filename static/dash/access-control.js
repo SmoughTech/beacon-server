@@ -55,6 +55,7 @@
   let pathDragPreviewTiles = new Set();
   let pathDraftVertices = [];
   let queueDragState = null;
+  let spawnDragState = null;
   const QUEUE_ENTRANCE_SNAP_RADIUS = 0.028;
   const QUEUE_PORTAL_SNAP_RADIUS = 0.024;
   let pathBrushWidth = 1;
@@ -639,11 +640,13 @@
     const p = mapXY(e);
     if (pathDragState) updatePathDrag(p);
     else if (queueDragState) updateQueueDrag(p);
+    else if (spawnDragState) updateSpawnDrag(p);
   }
 
   function onDocumentPathDragEnd() {
     if (pathDragState) endPathDrag();
     else if (queueDragState) endQueueDrag();
+    else if (spawnDragState) endSpawnDrag();
   }
 
   function bindPathDragListeners() {
@@ -655,7 +658,7 @@
 
   function unbindPathDragListeners() {
     if (!document.body.dataset.pathDragBound) return;
-    if (pathDragState || queueDragState) return;
+    if (pathDragState || queueDragState || spawnDragState) return;
     delete document.body.dataset.pathDragBound;
     document.removeEventListener("mousemove", onDocumentPathDragMove, true);
     document.removeEventListener("mouseup", onDocumentPathDragEnd, true);
@@ -801,6 +804,114 @@
       map_x: (best.tx + 0.5) / TILE_COLS,
       map_y: (best.ty + 0.5) / TILE_ROWS,
     };
+  }
+
+  async function createSpawnFromSnap(snap) {
+    const name = document.getElementById("accessSpawnName")?.value?.trim() || "Spawn";
+    const ticket_class = document.getElementById("accessSpawnClass")?.value || "ga";
+    const created = await api(`/events/${getDashEvent().id}/access-spawn-points`, {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        path_id: snap.path_id,
+        tile_index: snap.tile_index,
+        map_x: snap.map_x,
+        map_y: snap.map_y,
+        ticket_class,
+        updated_by: "dash_access",
+      }),
+    });
+    accessSpawnPoints.push(created);
+    selectedSpawnId = created.id;
+    renderAccessLists();
+    drawAccessLayers();
+    setStatus(`Placed spawn on path tile ${snap.tile_index + 1}.`);
+    return created;
+  }
+
+  function beginSpawnDrag(p) {
+    if (!accessPaths.length) {
+      setStatus("Paint a guest path first, then hold on it to place spawns.");
+      return;
+    }
+    spawnDragState = { curX: p.x, curY: p.y, snap: snapToPathTile(p.x, p.y) };
+    bindPathDragListeners();
+    drawAccessLayers();
+    if (spawnDragState.snap) {
+      setStatus("Spawn preview snapped to path — release to place.");
+    } else {
+      setStatus("Hold and drag over a painted path tile.");
+    }
+  }
+
+  function updateSpawnDrag(p) {
+    if (!spawnDragState) return;
+    spawnDragState.curX = p.x;
+    spawnDragState.curY = p.y;
+    spawnDragState.snap = snapToPathTile(p.x, p.y);
+    drawAccessLayers();
+  }
+
+  function endSpawnDrag() {
+    if (!spawnDragState) return;
+    const snap = spawnDragState.snap;
+    spawnDragState = null;
+    unbindPathDragListeners();
+    drawAccessLayers();
+    if (!snap) {
+      setStatus("Release on a path tile to place spawn.");
+      return;
+    }
+    createSpawnFromSnap(snap).catch((err) => setStatus(err.message || String(err)));
+  }
+
+  function drawSpawnLivePreview(svg, state) {
+    if (!state) return;
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.style.pointerEvents = "none";
+
+    if (state.snap) {
+      drawBarrierTileRects(
+        svg,
+        [tileKey(state.snap.tx, state.snap.ty)],
+        "#81c784",
+        "rgba(129,199,132,0.55)",
+        true
+      );
+      const cx = state.snap.map_x * SVG_W;
+      const cy = state.snap.map_y * SVG_H;
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", String(cx));
+      circle.setAttribute("cy", String(cy));
+      circle.setAttribute("r", "7");
+      circle.setAttribute("fill", "#66bb6a");
+      circle.setAttribute("stroke", "#fff");
+      circle.setAttribute("stroke-width", "2");
+      g.appendChild(circle);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", String(cx));
+      label.setAttribute("y", String(cy + 3));
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("fill", "#fff");
+      label.setAttribute("font-size", "8");
+      label.setAttribute("font-weight", "700");
+      label.textContent = "S";
+      g.appendChild(label);
+    } else {
+      const cx = state.curX * SVG_W;
+      const cy = state.curY * SVG_H;
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", String(cx));
+      circle.setAttribute("cy", String(cy));
+      circle.setAttribute("r", "6");
+      circle.setAttribute("fill", "none");
+      circle.setAttribute("stroke", "#ef5350");
+      circle.setAttribute("stroke-width", "2");
+      circle.setAttribute("stroke-dasharray", "4 3");
+      g.appendChild(circle);
+    }
+
+    svg.appendChild(g);
   }
 
   function drawPathFlowArrows(svg, path) {
@@ -1998,6 +2109,10 @@
       });
     }
 
+    if (spawnDragState && accessTool === "placeSpawn") {
+      drawSpawnLivePreview(svg, spawnDragState);
+    }
+
     if (draftBarrierPoints.length >= 1 && (accessLayers.barriers || accessTool === "drawBarrier")) {
       const draftPts = draftBarrierPoints.slice();
       if (draftBarrierClosed && draftPts.length >= 3) draftPts.push(draftPts[0]);
@@ -2413,6 +2528,7 @@
     pathDraftVertices = [];
     draftQueuePoints = [];
     queueDragState = null;
+    spawnDragState = null;
     syncAccessToolbarButtons();
     const hints = {
       select: "Select barriers, zones, queues, or scanners on the map or in the list.",
@@ -2420,7 +2536,7 @@
       drawPath:
         "Drag on the map to paint a path in walk order. Yellow arrows show flow. Use Save Flow to reverse direction.",
       placeSpawn:
-        "Click a painted path to snap a token spawn. Set ticket class first — sim injects tokens here.",
+        "Hold on the map and drag over a painted path — green S preview snaps to the nearest path tile. Release to place.",
       drawQueue:
         "Drag from the back of the line toward the scanner — cyan line follows the cursor; release near a portal to snap. Pick a scanner first.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
@@ -3213,34 +3329,6 @@
     }
 
     if (accessTool === "placeSpawn") {
-      try {
-        const snap = snapToPathTile(p.x, p.y);
-        if (!snap) {
-          setStatus("Click closer to a painted path tile.");
-          return true;
-        }
-        const name = document.getElementById("accessSpawnName")?.value?.trim() || "Spawn";
-        const ticket_class = document.getElementById("accessSpawnClass")?.value || "ga";
-        const created = await api(`/events/${getDashEvent().id}/access-spawn-points`, {
-          method: "POST",
-          body: JSON.stringify({
-            name,
-            path_id: snap.path_id,
-            tile_index: snap.tile_index,
-            map_x: snap.map_x,
-            map_y: snap.map_y,
-            ticket_class,
-            updated_by: "dash_access",
-          }),
-        });
-        accessSpawnPoints.push(created);
-        selectedSpawnId = created.id;
-        renderAccessLists();
-        drawAccessLayers();
-        setStatus(`Placed spawn on path tile ${snap.tile_index + 1}.`);
-      } catch (err) {
-        setStatus(err.message || String(err));
-      }
       return true;
     }
 
@@ -3380,8 +3468,15 @@
         (e) => {
           if (typeof currentTab === "undefined" || currentTab !== "access") return;
           if (e.button !== 0) return;
-          if (accessTool === "fillZone" || accessTool === "workLocations" || accessTool === "placeSpawn") {
+          if (accessTool === "fillZone" || accessTool === "workLocations") {
             e.preventDefault();
+            return;
+          }
+          if (accessTool === "placeSpawn") {
+            const p = mapXY(e);
+            beginSpawnDrag(p);
+            e.preventDefault();
+            e.stopPropagation();
             return;
           }
           if (accessTool === "drawPath") {
@@ -3422,6 +3517,11 @@
           if (queueDragState) {
             const p = mapXY(e);
             updateQueueDrag(p);
+            return;
+          }
+          if (spawnDragState) {
+            const p = mapXY(e);
+            updateSpawnDrag(p);
           }
         },
         true
@@ -3445,6 +3545,12 @@
             endQueueDrag();
             e.preventDefault();
             e.stopPropagation();
+            return;
+          }
+          if (spawnDragState) {
+            endSpawnDrag();
+            e.preventDefault();
+            e.stopPropagation();
           }
         },
         true
@@ -3455,6 +3561,7 @@
           if (barrierDragState) endBarrierDrag();
           if (pathDragState) endPathDrag();
           if (queueDragState) endQueueDrag();
+          if (spawnDragState) endSpawnDrag();
         },
         true
       );
@@ -3462,6 +3569,7 @@
         if (barrierDragState) endBarrierDrag();
         if (pathDragState) endPathDrag();
         if (queueDragState) endQueueDrag();
+        if (spawnDragState) endSpawnDrag();
       });
       mapWrap.addEventListener(
         "click",
@@ -3476,7 +3584,7 @@
             accessTool !== "placeSpawn"
           )
             return;
-          if (accessTool === "drawBarrier" || accessTool === "drawPath" || accessTool === "drawQueue") {
+          if (accessTool === "drawBarrier" || accessTool === "drawPath" || accessTool === "drawQueue" || accessTool === "placeSpawn") {
             e.stopImmediatePropagation();
             return;
           }
