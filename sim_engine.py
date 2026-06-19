@@ -287,13 +287,31 @@ class TokenFlowEngine:
         return self.queues_by_gate.get(gate_id) or []
 
     def queue_head_tile(self, gate_id: str) -> tuple[int, int] | None:
+        """Legacy alias — scan happens at queue_scan_tile (furthest point from tail)."""
+        return self.queue_scan_tile(gate_id)
+
+    def queue_scan_index(self, gate_id: str) -> int:
         tiles = self.queue_tiles(gate_id)
-        if tiles:
-            return tiles[-1]
-        gate = next((g for g in self.gates if g["id"] == gate_id), None)
-        if not gate:
-            return None
-        return grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+        if len(tiles) <= 1:
+            return 0
+        tail = tiles[0]
+        best_i = len(tiles) - 1
+        best_d = _manhattan(tail, tiles[-1])
+        for i, tile in enumerate(tiles):
+            dist = _manhattan(tail, tile)
+            if dist > best_d:
+                best_d = dist
+                best_i = i
+        return best_i
+
+    def queue_scan_tile(self, gate_id: str) -> tuple[int, int] | None:
+        tiles = self.queue_tiles(gate_id)
+        if not tiles:
+            gate = next((g for g in self.gates if g["id"] == gate_id), None)
+            if not gate:
+                return None
+            return grid_from_norm(float(gate["map_x"]), float(gate["map_y"]))
+        return tiles[self.queue_scan_index(gate_id)]
 
     def queue_tail_tile(self, gate_id: str) -> tuple[int, int] | None:
         tiles = self.queue_tiles(gate_id)
@@ -321,15 +339,13 @@ class TokenFlowEngine:
         if not token.target_gate_id:
             return False
         tiles = self.queue_tiles(token.target_gate_id)
-        head = self.queue_head_tile(token.target_gate_id)
-        if not head:
+        if not tiles:
+            head = self.queue_scan_tile(token.target_gate_id)
+            return head is not None and (token.tx, token.ty) == head
+        scan_idx = self.queue_scan_index(token.target_gate_id)
+        if token.queue_index is None or token.queue_index < scan_idx:
             return False
-        pos = (token.tx, token.ty)
-        if tiles:
-            if token.queue_index is None or token.queue_index < len(tiles) - 1:
-                return False
-            return pos == tiles[-1] or pos == head
-        return pos == head
+        return (token.tx, token.ty) == tiles[scan_idx]
 
     def greedy_step_toward(
         self,
@@ -383,9 +399,9 @@ class TokenFlowEngine:
         token.scan_timer = SCAN_TIME_TICKS
         if token.target_gate_id:
             self.gate_flash[token.target_gate_id] = SCAN_TIME_TICKS
-            head = self.queue_head_tile(token.target_gate_id)
-            if head:
-                token.tx, token.ty = head
+            scan_tile = self.queue_scan_tile(token.target_gate_id)
+            if scan_tile:
+                token.tx, token.ty = scan_tile
 
     def _finish_scan(self, token: Token) -> None:
         self.tokens = [t for t in self.tokens if t.id != token.id]
@@ -412,7 +428,7 @@ class TokenFlowEngine:
             return
 
         tiles = self.queue_tiles(gate_id)
-        head = self.queue_head_tile(gate_id)
+        scan_tile = self.queue_scan_tile(gate_id)
 
         if self.on_queue_head(token):
             self._start_scan(token)
@@ -422,13 +438,14 @@ class TokenFlowEngine:
             return self.queue_tile_taken(nx, ny, token.id)
 
         if not tiles:
-            if head and self.greedy_step_toward(token, head, occupied):
+            if scan_tile and self.greedy_step_toward(token, scan_tile, occupied):
                 token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
-            elif head and (token.tx, token.ty) == head:
+            elif scan_tile and (token.tx, token.ty) == scan_tile:
                 self._start_scan(token)
             return
 
         tail = tiles[0]
+        scan_idx = self.queue_scan_index(gate_id)
 
         if token.queue_index is None:
             if (token.tx, token.ty) == tail:
@@ -439,12 +456,14 @@ class TokenFlowEngine:
                 token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
             return
 
-        if token.queue_index >= len(tiles) - 1:
-            if (token.tx, token.ty) == tiles[-1] or (head and (token.tx, token.ty) == head):
+        if token.queue_index >= scan_idx:
+            if (token.tx, token.ty) == tiles[scan_idx]:
                 self._start_scan(token)
             return
 
         next_idx = token.queue_index + 1
+        if next_idx > scan_idx:
+            return
         if self.queue_index_taken(gate_id, next_idx, token.id):
             return
         nxt = tiles[next_idx]

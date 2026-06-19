@@ -1256,7 +1256,7 @@ DASH_HTML = r'''
         <div id="accessSectionQueues" class="accessSection hidden">
           <h3>Queues</h3>
           <div id="accessQueueSection" class="accessToolPanel hidden">
-            <p class="small" style="margin:0 0 8px">Drag from the back of the line toward the scanner — cyan preview follows the cursor. Release near a portal to snap; pick a scanner first.</p>
+            <p class="small" style="margin:0 0 8px">Drag from the back of the line (yellow) to the turnstile (cyan end). Scanning happens at the far end of the line — place the scanner marker there, not at the path entrance.</p>
             <div class="row">
               <div><label>Queue name</label><input id="accessQueueName" placeholder="North gate queue" /></div>
               <div><label>Scanner</label><select id="accessQueueGate"></select></div>
@@ -1532,7 +1532,7 @@ async function viewWifiSweep(id){const d=await api(`/events/${currentEvent.id}/w
 async function deleteWifiSweep(id){if(!confirm('Delete this Wi-Fi sweep?'))return; await api(`/events/${currentEvent.id}/wifi-sweeps/${id}`,{method:'DELETE'}); await loadWifiSweeps(); drawBase(); setStatus('Deleted Wi-Fi sweep.');}
 init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
-<script src="/static/dash/access-control.js?v=3.17.0"></script>
+<script src="/static/dash/access-control.js?v=3.17.1"></script>
 <script src="/static/dash/crowd-sim.js?v=1.6.0"></script>
 </body>
 </html>

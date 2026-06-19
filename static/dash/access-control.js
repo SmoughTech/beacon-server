@@ -2006,7 +2006,7 @@
       const tail = pts[0];
       [
         { p: tail, label: "tail", fill: "#ffd166" },
-        { p: head, label: "scanner", fill: "#26c6da" },
+        { p: head, label: "scan", fill: "#26c6da" },
       ].forEach(({ p, fill }) => {
         const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
         dot.setAttribute("cx", String(p.x * SVG_W));
@@ -2538,7 +2538,7 @@
       placeSpawn:
         "Hold on the map and drag over a painted path — green S preview snaps to the nearest path tile. Release to place.",
       drawQueue:
-        "Drag from the back of the line toward the scanner — cyan line follows the cursor; release near a portal to snap. Pick a scanner first.",
+        "Drag from the back of the line (yellow dot) to the turnstile where scanning happens (cyan dot). Place the scanner marker at that same spot.",
       fillZone: "Click inside a closed barrier perimeter. Place scanners on fence segments to create entry gaps.",
       linkPortal: "Select a scanner on the map or use Scanners to edit rules per device.",
       rfidDevices: "Add, edit, or place scanners on the map.",
@@ -3023,18 +3023,6 @@
     if (!gateId) {
       setStatus("Select a scanner for this queue line.");
       return;
-    }
-    const gate = (getDashGates() || []).find((g) => g.id === gateId);
-    if (gate) {
-      const mx = gate.map_x ?? gate.mapX;
-      const my = gate.map_y ?? gate.mapY;
-      if (mx != null && my != null) {
-        const end = snapQueueEndpoint({ x: mx, y: my });
-        const last = draftQueuePoints[draftQueuePoints.length - 1];
-        if (Math.hypot(last.x - end.x, last.y - end.y) > 1e-6) {
-          appendQueueSegment(last.x, last.y, end.x, end.y);
-        }
-      }
     }
     const name = document.getElementById("accessQueueName")?.value?.trim() || "Queue";
     const created = await api(`/events/${getDashEvent().id}/access-queues`, {

@@ -1,6 +1,6 @@
 """Tests for token flow processor."""
 
-from sim_engine import PathTrack, Token, TokenFlowEngine, TokenStage
+from sim_engine import PathTrack, Token, TokenFlowEngine, TokenStage, _manhattan
 
 
 def test_path_track_flow_forward():
@@ -105,6 +105,31 @@ def test_queue_does_not_scan_before_reaching_head():
     engine._advance_queue(token)
     assert token.stage == TokenStage.IN_QUEUE
     assert token.scan_timer == 0
+
+
+def test_queue_scans_at_farthest_point_from_tail():
+    zones = [{"id": "ga", "zone_class": "ga", "polygon": []}]
+    gates = [{"id": "g1", "map_x": 0.1, "map_y": 0.2, "allowed_classes": ["ga"]}]
+    paths = [{"id": "p1", "tiles": [[10, 10]], "flow_direction": "forward"}]
+    spawns = [{"id": "s1", "path_id": "p1", "tile_index": 0, "map_x": 0.01, "map_y": 0.02, "ticket_class": "ga"}]
+    queues = [
+        {
+            "gate_id": "g1",
+            "points": [
+                {"x": 0.1, "y": 0.2},
+                {"x": 0.15, "y": 0.2},
+                {"x": 0.15, "y": 0.25},
+                {"x": 0.1, "y": 0.2},
+            ],
+        }
+    ]
+    engine = TokenFlowEngine("evt", zones, gates, paths, spawns, queues)
+    tiles = engine.queue_tiles("g1")
+    scan_idx = engine.queue_scan_index("g1")
+    scan_tile = engine.queue_scan_tile("g1")
+    assert scan_idx > 0
+    assert scan_tile != tiles[0]
+    assert _manhattan(scan_tile, tiles[0]) >= _manhattan(tiles[-1], tiles[0])
 
 
 def test_spawn_requires_spawn_point():
