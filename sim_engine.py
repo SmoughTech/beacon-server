@@ -403,6 +403,42 @@ class TokenFlowEngine:
                 return True
         return False
 
+    def resolve_queue_gate(self, token: Token, allow_path_end_reach: bool = False) -> str | None:
+        gate_id = token.target_gate_id
+        if not gate_id:
+            return None
+        tiles = self.queue_tiles(gate_id)
+        if not tiles:
+            return None
+        pos = (token.tx, token.ty)
+        near = min(_manhattan(pos, t) for t in tiles[: min(12, len(tiles))])
+        limit = 12 if allow_path_end_reach else 8
+        if near <= limit:
+            return gate_id
+        return None
+
+    def _try_step_onto_queue_from_path(self, token: Token) -> bool:
+        gate_id = self.resolve_queue_gate(token)
+        if not gate_id:
+            return False
+        tiles = self.queue_tiles(gate_id)
+        if not tiles:
+            return False
+        pos = (token.tx, token.ty)
+        scan_idx = self.queue_scan_index(gate_id)
+        track = self.paths_by_id.get(token.path_id)
+        at_path_end = bool(track and track.at_downstream_end(token.path_index))
+
+        for i, tile in enumerate(tiles):
+            if tile != pos or i > scan_idx:
+                continue
+            if self.queue_index_taken(gate_id, i, token.id):
+                return at_path_end
+            self.enter_queue(token)
+            token.queue_index = i
+            return True
+        return False
+
     def enter_queue(self, token: Token) -> None:
         if token.stage == TokenStage.IN_QUEUE:
             return
@@ -411,32 +447,39 @@ class TokenFlowEngine:
         token.step_cooldown = 0
 
     def _try_join_queue_at_tail(self, token: Token) -> bool:
-        gate_id = token.target_gate_id
+        track = self.paths_by_id.get(token.path_id)
+        at_path_end = bool(track and track.at_downstream_end(token.path_index))
+        gate_id = self.resolve_queue_gate(token, allow_path_end_reach=at_path_end)
         if not gate_id:
             return False
         tiles = self.queue_tiles(gate_id)
         if not tiles:
             return False
+        token.target_gate_id = gate_id
         if self.queue_index_taken(gate_id, 0, token.id):
             return False
-
         tail = tiles[0]
         pos = (token.tx, token.ty)
+        dist = _manhattan(pos, tail)
+        snap_radius = 6 if at_path_end else 4
 
-        if pos == tail:
-            self.enter_queue(token)
-            token.queue_index = 0
-            return True
-
-        if self._is_adjacent(pos, tail) and not self._tile_blocked(tail[0], tail[1], token.id):
-            token.tx, token.ty = tail
+        if dist <= snap_radius:
+            if dist > 0:
+                token.tx, token.ty = tail
             self.enter_queue(token)
             token.queue_index = 0
             token.step_cooldown = QUEUE_STEP_EVERY_TICKS - 1
             return True
 
-        if _manhattan(pos, tail) <= 6:
-            if self.greedy_step_toward(token, tail, lambda x, y: self._tile_blocked(x, y, token.id)):
+        if dist <= 10:
+            if self.greedy_step_toward(
+                token,
+                tail,
+                lambda x, y: any(
+                    t.id != token.id and t.tx == x and t.ty == y and t.stage in (TokenStage.IN_QUEUE, TokenStage.SCANNING)
+                    for t in self.tokens
+                ),
+            ):
                 token.step_cooldown = PATH_STEP_EVERY_TICKS - 1
                 if (token.tx, token.ty) == tail:
                     self.enter_queue(token)
@@ -445,24 +488,8 @@ class TokenFlowEngine:
         return False
 
     def _try_join_queue_from_path(self, token: Token) -> bool:
-        gate_id = token.target_gate_id
-        if not gate_id:
-            return False
-        tiles = self.queue_tiles(gate_id)
-        if not tiles:
-            return False
-
-        scan_idx = self.queue_scan_index(gate_id)
-        pos = (token.tx, token.ty)
-        for i, tile in enumerate(tiles):
-            if tile != pos or i > scan_idx:
-                continue
-            if self.queue_index_taken(gate_id, i, token.id):
-                break
-            self.enter_queue(token)
-            token.queue_index = i
+        if self._try_step_onto_queue_from_path(token):
             return True
-
         return self._try_join_queue_at_tail(token)
 
     def _start_scan(self, token: Token) -> None:
@@ -539,6 +566,9 @@ class TokenFlowEngine:
 
         if token.step_cooldown > 0:
             token.step_cooldown -= 1
+            return
+
+        if self._try_step_onto_queue_from_path(token):
             return
 
         track = self.paths_by_id.get(token.path_id)
