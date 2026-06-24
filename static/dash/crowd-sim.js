@@ -38,7 +38,11 @@
   }
 
   function agentRadiusPx() {
-    return Math.max(2.2, (SVG_W / TILE_COLS) * 0.42);
+    const mapH = (typeof currentEvent !== "undefined" && currentEvent?.map_height_ft) || 450;
+    const personFt = (typeof currentEvent !== "undefined" && currentEvent?.person_height_ft) || 5.75;
+    const tokenFt = personFt * 0.22;
+    const px = (tokenFt / mapH) * SVG_H;
+    return Math.max(2, Math.min(14, px));
   }
 
   function ensureSimSvg() {

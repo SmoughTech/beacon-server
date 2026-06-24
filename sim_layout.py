@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 
 from access_control import barrier_row_to_dict, enrich_scanner_gate_dict, path_row_to_dict, queue_row_to_dict, sim_location_row_to_dict, zone_row_to_dict
 from geometry import build_scanner_graph, build_surface_grid, build_surface_payload, navmesh_to_bytes, rasterize_walls
-from tile_grid import TILE_COLS, TILE_ROWS, build_coordinate_system
+from tile_grid import TILE_COLS, TILE_ROWS
+from map_scale import build_coordinate_system_for_event
 
 
 SIM_LAYOUT_SCHEMA_VERSION = 2
@@ -110,7 +111,7 @@ def register_sim_layout(
             "event_id": event_id,
             "event_name": event.get("name", event_id),
             "map_url": event.get("map_url"),
-            "coordinate_system": build_coordinate_system(),
+            "coordinate_system": build_coordinate_system_for_event(event),
             "barriers": barriers,
             "zones": zones,
             "scanners": gates,

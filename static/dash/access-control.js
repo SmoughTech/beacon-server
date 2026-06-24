@@ -1,9 +1,49 @@
 (function () {
   const SVG_W = 1000;
   const SVG_H = 562.5;
-  const TILE_SIZE_FT = 2;
   const TILE_COLS = 400;
   const TILE_ROWS = 225;
+  const DEFAULT_MAP_WIDTH_FT = 800;
+  const DEFAULT_MAP_HEIGHT_FT = 450;
+  let eventMapWidthFt = DEFAULT_MAP_WIDTH_FT;
+  let eventMapHeightFt = DEFAULT_MAP_HEIGHT_FT;
+  let eventScannerScalePct = null;
+
+  function getTileSizeFt() {
+    return eventMapWidthFt / TILE_COLS;
+  }
+
+  function updateTileGridLabel() {
+    const el = document.getElementById("accessTileGridLabel");
+    if (!el) return;
+    const tileFt = getTileSizeFt();
+    const label =
+      tileFt >= 1
+        ? `${tileFt.toFixed(1)} ft`
+        : `${tileFt.toFixed(2)} ft`;
+    el.textContent = `Tile grid (${label}, 400×225)`;
+  }
+
+  window.applyEventMapScale = function applyEventMapScale(ev) {
+    eventMapWidthFt = Number(ev?.map_width_ft) || DEFAULT_MAP_WIDTH_FT;
+    eventMapHeightFt = Number(ev?.map_height_ft) || DEFAULT_MAP_HEIGHT_FT;
+    eventScannerScalePct = Math.max(
+      40,
+      Math.min(150, Math.round((72 * DEFAULT_MAP_WIDTH_FT) / eventMapWidthFt))
+    );
+    applyScannerMarkerScale(eventScannerScalePct);
+    updateTileGridLabel();
+    if (typeof drawAccessLayers === "function") drawAccessLayers();
+  };
+
+  window.getEventMapScale = function getEventMapScale() {
+    return {
+      mapWidthFt: eventMapWidthFt,
+      mapHeightFt: eventMapHeightFt,
+      tileSizeFt: getTileSizeFt(),
+      scannerScalePct: eventScannerScalePct,
+    };
+  };
   const VERTEX_COLS = TILE_COLS + 1;
   const VERTEX_ROWS = TILE_ROWS + 1;
   const GRID_W = TILE_COLS;
@@ -95,6 +135,9 @@
   let placeSimLocationType = "staff_spot";
 
   function getScannerMarkerScale() {
+    if (eventScannerScalePct != null) {
+      return Math.max(0.4, Math.min(1.5, eventScannerScalePct / 100));
+    }
     const raw = Number(localStorage.getItem(SCANNER_SCALE_KEY));
     if (!Number.isFinite(raw)) return 0.72;
     return Math.max(0.5, Math.min(1.3, raw / 100));
@@ -3649,16 +3692,22 @@
     }
 
     const scaleSlider = document.getElementById("dashScannerScale");
-    const savedScale = Math.round(getScannerMarkerScale() * 100);
+    const savedScale =
+      eventScannerScalePct != null
+        ? eventScannerScalePct
+        : Math.round(getScannerMarkerScale() * 100);
     applyScannerMarkerScale(savedScale);
     if (scaleSlider) {
       scaleSlider.value = String(savedScale);
       scaleSlider.addEventListener("input", () => {
         const pct = Number(scaleSlider.value);
+        eventScannerScalePct = pct;
         applyScannerMarkerScale(pct);
         localStorage.setItem(SCANNER_SCALE_KEY, String(pct));
       });
     }
+
+    updateTileGridLabel();
 
     updateAccessMapPanel();
     setAccessTool("select");

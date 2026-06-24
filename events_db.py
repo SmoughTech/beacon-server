@@ -57,6 +57,29 @@ def init_events_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
+    cols = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({EVENTS_TABLE})").fetchall()
+    }
+    if "map_width_ft" not in cols:
+        conn.execute(
+            f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN map_width_ft REAL NOT NULL DEFAULT 800"
+        )
+    if "map_height_ft" not in cols:
+        conn.execute(
+            f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN map_height_ft REAL NOT NULL DEFAULT 450"
+        )
+    if "person_map_x" not in cols:
+        conn.execute(f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN person_map_x REAL")
+    if "person_map_y" not in cols:
+        conn.execute(f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN person_map_y REAL")
+    if "person_height_norm" not in cols:
+        conn.execute(f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN person_height_norm REAL")
+    if "person_height_ft" not in cols:
+        conn.execute(
+            f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN person_height_ft REAL NOT NULL DEFAULT 5.75"
+        )
+
     count = conn.execute(f"SELECT COUNT(*) AS c FROM {EVENTS_TABLE}").fetchone()["c"]
     if count:
         return
@@ -65,8 +88,11 @@ def init_events_schema(conn: sqlite3.Connection) -> None:
     for event in DEFAULT_SEED_EVENTS:
         conn.execute(
             f"""
-            INSERT INTO {EVENTS_TABLE} (id, name, map_name, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO {EVENTS_TABLE} (
+                id, name, map_name, description, created_at, updated_at,
+                map_width_ft, map_height_ft, person_height_ft
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 800, 450, 5.75)
             """,
             (
                 event["id"],
@@ -86,6 +112,12 @@ def event_row_to_dict(row: sqlite3.Row, map_url_for: Callable[[str], str]) -> di
         "map_name": row["map_name"],
         "description": row["description"],
         "map_url": map_url_for(row["map_name"]),
+        "map_width_ft": row["map_width_ft"] if "map_width_ft" in row.keys() else 800,
+        "map_height_ft": row["map_height_ft"] if "map_height_ft" in row.keys() else 450,
+        "person_map_x": row["person_map_x"] if "person_map_x" in row.keys() else None,
+        "person_map_y": row["person_map_y"] if "person_map_y" in row.keys() else None,
+        "person_height_norm": row["person_height_norm"] if "person_height_norm" in row.keys() else None,
+        "person_height_ft": row["person_height_ft"] if "person_height_ft" in row.keys() else 5.75,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
