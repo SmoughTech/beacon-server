@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,16 @@ from access_control import (
     register_access_control,
     spawn_point_row_to_dict,
     zone_row_to_dict,
+)
+from events_db import (
+    EVENTS_TABLE,
+    init_events_schema,
+    map_extension_from_content_type,
+    map_extension_from_filename,
+    query_all_events,
+    query_event_by_id,
+    slugify_event_id,
+    unique_event_id,
 )
 from scanners_db import SCANNERS_TABLE, migrate_scanners_schema
 from sim_engine import register_sim_engine
@@ -877,6 +887,7 @@ def init_db():
             )
 
         init_access_control_db(conn)
+        init_events_schema(conn)
 
         conn.commit()
 
@@ -1049,6 +1060,9 @@ def health():
         beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
         scanner_count = conn.execute(f"SELECT COUNT(*) AS count FROM {SCANNERS_TABLE}").fetchone()["count"]
         wifi_sweep_count = conn.execute("SELECT COUNT(*) AS count FROM wifi_sweeps").fetchone()["count"]
+        event_maps = conn.execute(
+            f"SELECT map_name FROM {EVENTS_TABLE} ORDER BY name COLLATE NOCASE ASC"
+        ).fetchall()
 
     return {
         "status": "ok",
@@ -1057,34 +1071,74 @@ def health():
         "beacon_count": beacon_count,
         "scanner_count": scanner_count,
         "wifi_sweep_count": wifi_sweep_count,
-        "maps": [map_file_status(event["map_name"]) for event in EVENTS],
+        "maps": [map_file_status(row["map_name"]) for row in event_maps],
         "time": now_iso(),
     }
 
 
-EVENTS = [
-    {
-        "id": "test_fest",
-        "name": "Test Fest",
-        "map_name": "test_fest_map",
-        "description": "Test Fest park map for SiteOps, scanners, and access control.",
-    },
-]
+def list_event_configs() -> list[dict]:
+    with get_connection() as conn:
+        return query_all_events(conn, find_map_url)
 
 
 def get_event_config(event_id: str) -> dict:
-    for event in EVENTS:
-        if event["id"] == event_id:
-            event_copy = dict(event)
-            event_copy["map_url"] = find_map_url(event_copy["map_name"])
-            return event_copy
-
-    raise HTTPException(status_code=404, detail="Event not found")
+    with get_connection() as conn:
+        event = query_event_by_id(conn, event_id, find_map_url)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
 
 
 @app.get("/events")
 def get_events():
-    return [get_event_config(event["id"]) for event in EVENTS]
+    return list_event_configs()
+
+
+@app.post("/events")
+async def create_event(
+    name: str = Form(...),
+    map: UploadFile = File(...),
+):
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Event name is required")
+
+    ext = map_extension_from_content_type(map.content_type)
+    if ext is None:
+        ext = map_extension_from_filename(map.filename or "")
+    if ext not in MAP_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Map must be PNG, JPEG, or WebP",
+        )
+
+    data = await map.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Map file is empty")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Map file must be under 25 MB")
+
+    with get_connection() as conn:
+        base_id = slugify_event_id(clean_name)
+        event_id = unique_event_id(conn, base_id)
+        map_name = f"{event_id}_map"
+        ts = now_iso()
+        description = f"{clean_name} event map."
+
+        conn.execute(
+            f"""
+            INSERT INTO {EVENTS_TABLE} (id, name, map_name, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, clean_name, map_name, description, ts, ts),
+        )
+        conn.commit()
+
+    map_path = os.path.join(MAPS_DIR, f"{map_name}{ext}")
+    with open(map_path, "wb") as handle:
+        handle.write(data)
+
+    return get_event_config(event_id)
 
 
 @app.get("/events/{event_id}")
@@ -1127,7 +1181,11 @@ register_sim_engine(
 
 @app.get("/maps/status")
 def maps_status():
-    return [map_file_status(event["map_name"]) for event in EVENTS]
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT map_name FROM {EVENTS_TABLE} ORDER BY name COLLATE NOCASE ASC"
+        ).fetchall()
+    return [map_file_status(row["map_name"]) for row in rows]
 
 
 @app.get("/lite", response_class=HTMLResponse)
@@ -1176,7 +1234,7 @@ DASH_HTML = r'''
     button,input,select,textarea{font:inherit} button{border:1px solid var(--line);border-radius:12px;background:#1d3552;color:var(--text);padding:9px 12px;cursor:pointer} button:hover{filter:brightness(1.12)} button.primary{background:#1565c0;border-color:#5db7ff} button.danger{background:#6b1e25;border-color:#ff6b6b} button.ghost{background:transparent}
     input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:#07101b;color:var(--text);padding:10px;outline:none} textarea{min-height:120px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px} label{display:block;font-size:12px;color:var(--muted);margin:8px 0 5px}
     .app{max-width:1500px;margin:0 auto;padding:18px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}.brand h1{margin:0;font-size:30px;letter-spacing:.05em}.brand p{margin:4px 0 0;color:var(--muted)}
-    .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}
+    .events,.tabs{display:flex;gap:8px;flex-wrap:wrap}.event.active,.tab.active{outline:2px solid var(--green);background:#12344a}.event b{display:block}.event span{font-size:12px;color:var(--muted)}.eventNewBtn{border-style:dashed;border-color:var(--green);background:rgba(109,247,167,.08);min-width:120px}.eventNewBtn b{color:var(--green)}.modalBackdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:18px;z-index:100}.modalPanel{width:min(460px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:16px}.modalPanel h3{margin:0 0 6px;font-size:20px}.modalActions{display:flex;gap:8px;margin-top:12px}.modalActions button{flex:1}
     .layout{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,.85fr);gap:16px}@media(max-width:980px){.layout{grid-template-columns:1fr}}.dashShell{display:grid;grid-template-columns:minmax(240px,260px) minmax(0,1fr);gap:16px;align-items:start}@media(max-width:1100px){.dashShell{grid-template-columns:1fr}}.dashMain{min-width:0}.dashSidebar{position:sticky;top:18px;min-width:240px}.dashSidebar .panelBody{overflow:visible}.dashLayerList{display:flex;flex-direction:column;gap:6px}.dashLayerItem{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.3;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;color:#d8edf8;white-space:nowrap}.dashLayerItem input[type=checkbox]{width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;flex:0 0 18px;accent-color:var(--green)}.accessScannerOrient{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessScannerOrient h4{margin:0 0 6px;font-size:14px;color:#b3e5fc}.accessScannerOrient input[type=range]{padding:0;margin:6px 0;width:100%}.accessScannerOrientDeg{color:#64b5f6;font-weight:700}.flowFlipBtn{width:100%;margin:4px 0 8px;text-align:center;font-size:13px}.flowFlipBtn.active{outline:2px solid #ffb74d;background:#3d2e14;border-color:#ffb74d}.accessScannerScale{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.accessScannerScale label{display:flex;justify-content:space-between;align-items:center;margin:0 0 6px;font-size:12px;color:var(--muted)}.accessScannerScale input[type=range]{padding:0;width:100%}.gateFenceLine{stroke:#64b5f6;stroke-width:2.5;stroke-linecap:round;opacity:.9;pointer-events:none}.gateSnapSvgDot{fill:#64b5f6;stroke:#fff;stroke-width:1.2;pointer-events:none}.gateSnapSvgDot.selected{fill:#6df7a7}
     .panel{background:rgba(16,28,43,.94);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px rgba(0,0,0,.28);overflow:hidden}.panelHeader{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.panelHeader h2{margin:0;font-size:18px}.panelBody{padding:14px}.muted{color:var(--muted);font-size:12px}.status{color:#b7d7ff;font-size:12px;margin-top:8px;white-space:pre-wrap}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.list{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}.card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}.card.selected{outline:2px solid var(--green);background:#173a35}.card h3{margin:0 0 4px;font-size:15px}.card p{margin:0 0 8px;color:var(--muted);font-size:12px}.small{font-size:11px;color:var(--muted)}
     .mapWrap{position:relative;width:100%;aspect-ratio:16/9;background:#0d1724;border-radius:14px;overflow:hidden;border:1px solid var(--line)}.mapStage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}.mapWrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;-webkit-user-drag:none;user-drag:none;pointer-events:none;-webkit-user-select:none;user-select:none}.placeholder{position:absolute;inset:0;background:linear-gradient(135deg,#29475e,#17482a);display:flex;align-items:center;justify-content:center;color:#d8edf8}.marker{position:absolute;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;box-shadow:0 1px 8px rgba(0,0,0,.5);cursor:pointer}.marker.gate{overflow:visible;border-radius:4px;transform:translate(-50%,-50%) scale(var(--dash-scanner-scale,0.72));z-index:10;pointer-events:auto}.marker.gate.draggingGate{z-index:20}.gateSnapDot{position:absolute;width:4px;height:4px;border-radius:50%;background:#64b5f6;border:1px solid #fff;transform:translate(-50%,-50%);pointer-events:auto;box-shadow:0 0 2px rgba(0,0,0,.65);z-index:2}.gateSnapDot.selected{background:#6df7a7}.gateSnapDotHit{width:12px;height:12px;background:transparent;border:0;box-shadow:none}.mapPanLockBtn{position:absolute;top:10px;right:10px;z-index:12;width:36px;height:36px;padding:0;border-radius:10px;background:rgba(8,17,27,.9);border:1px solid var(--line);font-size:17px;line-height:1;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}.mapPanLockBtn.unlocked{background:rgba(21,58,90,.92)}.mapWrap.mapPanLocked{cursor:default}.gateDragHandle{position:absolute;left:calc(50% + 8px);top:calc(50% + 8px);width:11px;height:11px;border-radius:50%;background:#ffe082;border:2px solid #fff;transform:translate(-50%,-50%);cursor:grab;pointer-events:auto;z-index:4;box-shadow:0 1px 6px rgba(0,0,0,.45)}.gateDragHandle.dragging{cursor:grabbing;background:#6df7a7}.marker.gate.draggingGate{opacity:.88}.gateSnapDotHit::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;transform:translate(-50%,-50%);border-radius:50%;background:#64b5f6;border:1px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.65);pointer-events:none}.marker.selected{outline:3px solid var(--green);outline-offset:3px}.poi{width:16px;height:16px;background:#e53935}.gate{width:16px;height:9px;background:#9c27b0;color:#fff;display:grid;place-items:center;font-size:8px;font-weight:900;border-radius:3px}.gate::after{content:'S'}.gate.handheld{width:12px;height:18px;border-radius:4px;background:#1565c0;font-size:7px}.gate.handheld::after{content:'H'}.gate.ipad{width:17px;height:13px;border-radius:4px;background:#00a884;font-size:7px}.gate.ipad::after{content:'I'}.gate.scanner{width:18px;height:10px;border-radius:3px;background:#9c27b0}.gate.scanner::after{content:'S'}.marker.simLoc{width:14px;height:14px;border-radius:4px;font-size:8px;font-weight:900;display:grid;place-items:center;color:#fff}.marker.simLoc.vendor{background:#ff9800}.marker.simLoc.staff{background:#42a5f5}.marker.simLoc::after{content:attr(data-sim-loc-icon)}.marker.simLoc.selected{outline:2px solid #ffe082}.anchor{width:14px;height:14px;background:#00e5ff}.survey{width:18px;height:18px;background:#ffd166}.heat{width:30px;height:30px;border:0;opacity:.62;mix-blend-mode:screen}.deviceBlob{position:absolute;transform:translate(-50%,-50%);border-radius:999px;pointer-events:auto;cursor:pointer;mix-blend-mode:screen;filter:blur(.2px);box-shadow:0 0 22px rgba(255,255,255,.08)}.deviceBlob.selected{outline:2px solid rgba(255,255,255,.9);outline-offset:4px;box-shadow:0 0 0 5px rgba(124,255,155,.18),0 0 30px rgba(124,255,155,.35)}.deviceBlobLabel{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#f7fbff;font-size:12px;text-shadow:0 2px 6px #000,0 0 4px #000;pointer-events:none;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:2px 6px;line-height:1}.deviceBlobCard{position:absolute;transform:translate(-50%,0);background:rgba(6,16,27,.94);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:7px 9px;color:#f5f8fc;font-size:11px;white-space:nowrap;pointer-events:auto;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard.selected{border-color:#7CFF9B;box-shadow:0 0 0 2px rgba(124,255,155,.25),0 8px 22px rgba(0,0,0,.45)}.deviceBlobCard b{display:block;font-size:12px;margin-bottom:2px}.deviceSweepStat{font-variant-numeric:tabular-nums;color:#d8edf8}.deviceSweepModePill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;font-size:10px;color:var(--muted)}.pathLine{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.accessOverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}.mapWrap.accessPaintCursor,.mapWrap.accessPaintCursor .mapStage{cursor:crosshair}.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}.grad{width:160px;height:14px;border-radius:10px;background:linear-gradient(90deg,#00e676,#9cff57,#ffeb3b,#ff9800,#ff1744)}
@@ -1329,6 +1387,20 @@ DASH_HTML = r'''
   </div>
   </div>
 </div>
+<div id="newEventModal" class="modalBackdrop hidden" onclick="if(event.target===this)closeNewEventModal()">
+  <div class="modalPanel" onclick="event.stopPropagation()">
+    <h3>New Event</h3>
+    <p class="muted">Upload a site map image. POIs, scanners, and access layout are added in Dash after creation.</p>
+    <label>Event name</label>
+    <input id="newEventName" placeholder="Summer Fest 2026" maxlength="120" />
+    <label>Map image (PNG, JPEG, or WebP)</label>
+    <input id="newEventMap" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" />
+    <div class="modalActions">
+      <button class="primary" id="newEventCreateBtn" onclick="createEvent()">Create Event</button>
+      <button onclick="closeNewEventModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 <script>
 let events=[], currentEvent=null, currentTab='overview', mapClickMode=null, dataMode='pois';
 let mapAnchors=[], pois=[], gates=[], wifiSweeps=[], surveyPaths=[], deviceSweeps=[]; let deviceSweepMode="BLE", deviceSweepView="readable", selectedDeviceSweepId=null, deviceSweepShowAll=true; let dashSearchMatches=[], dashSearchIndex=-1;
@@ -1384,8 +1456,12 @@ document.getElementById('mapWrap').addEventListener('mousemove',handleMapEdgeScr
 document.getElementById('mapWrap').addEventListener('mouseleave',stopEdgeScroll);
 document.getElementById('mapWrap').addEventListener('click', e=>{const p=mapXY(e); if(!mapClickMode)return; if(mapClickMode==='surveyStart'){remoteSurveyStart=p; marker(p.x,p.y,'anchor','Survey start'); updateSurveyInfo(); setStatus('Survey start set.');} if(mapClickMode==='surveyEnd'){remoteSurveyEnd=p; marker(p.x,p.y,'anchor','Survey end'); updateSurveyInfo(); setStatus('Survey end set.');} if(mapClickMode==='calibration'){calibrationMapPoint=p; marker(p.x,p.y,'anchor','New calibration anchor'); document.getElementById('calMapInfo').textContent=`Map point: ${p.x.toFixed(4)}, ${p.y.toFixed(4)}`; setStatus('Calibration map point set.');} if(mapClickMode==='movePoi'&&selectedKind==='poi'){document.getElementById('editPoiMapX').value=p.x.toFixed(4); document.getElementById('editPoiMapY').value=p.y.toFixed(4); setStatus('POI map position updated in editor. Click Save POI.');} if(mapClickMode==='moveGate'&&selectedKind==='gate'){document.getElementById('editGateMapX').value=p.x.toFixed(4); document.getElementById('editGateMapY').value=p.y.toFixed(4); setStatus('Scanner map position updated in editor. Click Save Scanner.');} if(mapClickMode==='newGate'){document.getElementById('newGateMapX').value=p.x.toFixed(4); document.getElementById('newGateMapY').value=p.y.toFixed(4); setStatus('New scanner map position set. Click Create Scanner.');} if(mapClickMode==='newPoi'){document.getElementById('newPoiMapX').value=p.x.toFixed(4); document.getElementById('newPoiMapY').value=p.y.toFixed(4); setStatus('New POI map position set. Click Create POI.');} if(mapClickMode==='surveyEditStart'&&selectedKind==='survey'){document.getElementById('editSurveyStartX').value=p.x.toFixed(4); document.getElementById('editSurveyStartY').value=p.y.toFixed(4); setStatus('Survey start updated in editor. Click Save Survey.');} if(mapClickMode==='surveyEditEnd'&&selectedKind==='survey'){document.getElementById('editSurveyEndX').value=p.x.toFixed(4); document.getElementById('editSurveyEndY').value=p.y.toFixed(4); setStatus('Survey end updated in editor. Click Save Survey.');} if(mapClickMode==='moveSimLoc'&&selectedKind==='simLocation'){document.getElementById('editSimLocMapX').value=p.x.toFixed(4); document.getElementById('editSimLocMapY').value=p.y.toFixed(4); setStatus('Work location position updated in editor. Click Save.');} mapClickMode=null;});
 function updateSurveyInfo(){document.getElementById('rsMapInfo').textContent=`Start: ${remoteSurveyStart?remoteSurveyStart.x.toFixed(4)+', '+remoteSurveyStart.y.toFixed(4):'not set'} • End: ${remoteSurveyEnd?remoteSurveyEnd.x.toFixed(4)+', '+remoteSurveyEnd.y.toFixed(4):'not set'}`}
-async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); updateMapPanLockButton(); applyMapTransform(); events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); selectEvent((events.find(ev=>ev.id==='test_fest')||events[0]||{id:'test_fest'}).id);}
-async function selectEvent(id){currentEvent=await api('/events/'+id); document.querySelectorAll('.event').forEach((b,i)=>b.classList.toggle('active',events[i]?.id===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const stage=getMapStage(); stage.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.draggable=false; img.src=currentEvent.map_url; img.style.opacity=(mapOpacity/100).toFixed(2); img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; stage.prepend(ph)}; stage.prepend(img); setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); selectedKind=null; selectedId=null; await refreshAll();}
+async function init(){setMapOpacity(mapOpacity); setMapZoom(mapZoom); updateMapPanLockButton(); applyMapTransform(); await loadEventButtons(); const preferred=localStorage.getItem('beaconDashEventId'); const pick=events.find(ev=>ev.id===preferred)||events.find(ev=>ev.id==='test_fest')||events[0]; if(pick)await selectEvent(pick.id);}
+async function loadEventButtons(){events=await api('/events'); const wrap=document.getElementById('eventButtons'); wrap.innerHTML=''; events.forEach(ev=>{const b=document.createElement('button'); b.className='event'; b.dataset.eventId=ev.id; b.innerHTML=`<b>${escapeHtml(ev.name)}</b><span>${escapeHtml(ev.description||'')}</span>`; b.onclick=()=>selectEvent(ev.id); wrap.appendChild(b)}); const add=document.createElement('button'); add.className='event eventNewBtn'; add.innerHTML='<b>+ New Event</b><span>Upload a map</span>'; add.onclick=()=>openNewEventModal(); wrap.appendChild(add);}
+function openNewEventModal(){document.getElementById('newEventModal').classList.remove('hidden'); document.getElementById('newEventName').focus();}
+function closeNewEventModal(){document.getElementById('newEventModal').classList.add('hidden'); document.getElementById('newEventName').value=''; document.getElementById('newEventMap').value='';}
+async function createEvent(){const name=document.getElementById('newEventName').value.trim(); const fileInput=document.getElementById('newEventMap'); const file=fileInput.files&&fileInput.files[0]; if(!name){setStatus('Enter an event name.'); return;} if(!file){setStatus('Choose a map image to upload.'); return;} const btn=document.getElementById('newEventCreateBtn'); btn.disabled=true; btn.textContent='Creating...'; try{const form=new FormData(); form.append('name',name); form.append('map',file); const res=await fetch('/events',{method:'POST',body:form}); if(!res.ok)throw new Error(await res.text()); const created=await res.json(); closeNewEventModal(); await loadEventButtons(); await selectEvent(created.id); setStatus(`Created event ${created.name}. Add POIs and scanners in Dash.`);}catch(e){setStatus('Create event failed: '+e.message);}finally{btn.disabled=false; btn.textContent='Create Event';}}
+async function selectEvent(id){currentEvent=await api('/events/'+id); localStorage.setItem('beaconDashEventId',id); document.querySelectorAll('.event').forEach(b=>b.classList.toggle('active',b.dataset.eventId===id)); document.getElementById('mapTitle').textContent=currentEvent.name+' Map'; const stage=getMapStage(); stage.querySelectorAll('img,.placeholder').forEach(e=>e.remove()); const img=document.createElement('img'); img.draggable=false; img.src=currentEvent.map_url+(currentEvent.map_url.includes('?')?'&':'?')+'v='+Date.now(); img.style.opacity=(mapOpacity/100).toFixed(2); img.onerror=()=>{const ph=document.createElement('div'); ph.className='placeholder'; ph.textContent='Map image missing'; stage.prepend(ph)}; stage.prepend(img); setMapOpacity(mapOpacity); setMapZoom(mapZoom); applyMapTransform(); selectedKind=null; selectedId=null; await refreshAll();}
 async function refreshAll(){if(!currentEvent)return; try{[pois,gates,mapAnchors]=await Promise.all([api(`/events/${currentEvent.id}/pois`),api(`/events/${currentEvent.id}/scanners`),api(`/events/${currentEvent.id}/calibration-anchors`)]); try{surveyPaths=await api(`/events/${currentEvent.id}/survey-paths`)}catch(e){surveyPaths=[]} try{deviceSweeps=await api(`/events/${currentEvent.id}/device-map-sweeps`)}catch(e){deviceSweeps=[]} drawBase(); setStatus(`Loaded ${currentEvent.name}: ${pois.length} POIs, ${gates.length} gates, ${mapAnchors.length} anchors.`);}catch(e){setStatus('Refresh failed: '+e.message)}}
 function selectPoi(id){setSelected('poi',id); setTab('data', false); dataMode='pois'; renderPois(); drawBase(); setStatus('Selected POI.');}
 async function loadPois(){dataMode='pois'; pois=await api(`/events/${currentEvent.id}/pois`); if(selectedKind!=='poi'&&selectedKind!=='newPoi'){setSelected(null,null);} renderPois(); drawBase();}
