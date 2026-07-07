@@ -1392,7 +1392,7 @@ DASH_HTML = r'''
 <body>
 <div class="app">
   <div class="top"><div class="brand"><h1>Beacon Dash</h1><p>Event admin, Wi-Fi heatmaps, and remote surveying.</p></div><div class="events" id="eventButtons"></div></div>
-  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="sim">Crowd Sim</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
+  <div class="tabs" id="tabs"><button class="tab active" data-tab="overview">Overview</button><button class="tab" data-tab="wifi">Wi-Fi Heatmaps</button><button class="tab" data-tab="deviceSweeps">Device Sweeps</button><button class="tab" data-tab="remoteSurvey">Remote Survey</button><button class="tab" data-tab="calibration">Calibration</button><button class="tab" data-tab="access">Access Control</button><button class="tab" data-tab="sim">Crowd Sim</button><button class="tab" data-tab="counts">Live Counts</button><button class="tab" data-tab="data">POIs / Survey</button><button class="tab" data-tab="messages">Messages</button></div><br />
   <div class="dashShell">
   <aside class="panel dashSidebar"><div class="panelHeader"><h2>Map Layers</h2></div><div class="panelBody"><div class="dashLayerList"><label class="dashLayerItem"><input type="checkbox" id="accessLayerSnap" checked> Barrier snaps</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerBarriers" checked> Barriers</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerZones" checked> Zones</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerGates" checked> Scanners</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPois" checked> POIs</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerAnchors" checked> Anchors</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerWorkLocs" checked> Work locations</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerTileGrid" checked> <span id="accessTileGridLabel">Tile grid (2.0 ft, 400×225)</span></label><label class="dashLayerItem"><input type="checkbox" id="accessLayerPaths" checked> Guest paths</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerSpawnPoints" checked> Spawn points</label><label class="dashLayerItem"><input type="checkbox" id="accessLayerQueues" checked> Queue lines</label></div><div class="accessScannerScale"><label>Scanner size <span id="dashScannerScaleValue">72%</span></label><input id="dashScannerScale" type="range" min="50" max="130" value="72"></div><div id="accessScannerOrient" class="accessScannerOrient hidden"><h4 id="accessScannerOrientTitle">Fence heading</h4><p class="small">Drag to align snap points with the fence line.</p><label>Heading <span class="accessScannerOrientDeg" id="accessScannerOrientDeg">0°</span></label><input id="mapScannerFenceHeading" type="range" min="0" max="359" value="0"><label style="margin-top:10px">Walk-through</label><p class="small">Arrow shows foot-traffic direction (⊥ fence).</p><button type="button" id="scannerFlowFlipBtn" class="flowFlipBtn" onclick="toggleScannerFlowFlip()" title="Reverse walk-through direction">⇄ Flip direction</button><div class="row" style="margin-top:6px"><button class="primary" onclick="saveScannerFenceHeading()">Save</button><button onclick="resetScannerFenceHeadingPreview()">Reset</button></div></div></div></aside>
   <div class="dashMain">
@@ -1421,6 +1421,33 @@ DASH_HTML = r'''
           <button onclick="simCancel()">Stop &amp; Clear</button>
         </div>
         <div id="simStats" class="small muted" style="margin-top:10px">Not running.</div>
+      </section>
+      <section id="tab-counts" class="hidden">
+        <p class="muted">Live crowd counts pushed by external counters. The <b>gate ledger</b> (in&minus;out) is the authoritative total; <b>density</b> is an independent cross-check. Density heatmaps overlay on the map.</p>
+        <div class="row">
+          <button class="primary" onclick="refreshCounts()">Refresh</button>
+          <button id="countsAutoBtn" class="good" onclick="toggleCountsAuto()">Auto: On</button>
+          <button class="ghost" onclick="openCountsLivePage()">Full-screen view</button>
+        </div>
+        <div id="countsSummary" style="margin-top:12px"></div>
+        <div class="accessSection">
+          <h3>Sources</h3>
+          <div id="countsSourceList" class="list"></div>
+        </div>
+        <div class="accessToolPanel" style="margin-top:10px">
+          <h3 style="margin:0 0 8px">Add counting source</h3>
+          <div class="row">
+            <div><label>Name</label><input id="countsNewName" placeholder="North Gate cam" /></div>
+            <div><label>Kind</label><select id="countsNewKind"><option value="gate">Gate (in / out)</option><option value="density">Density (heads)</option></select></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div><label>Zone (optional)</label><select id="countsNewZone"><option value="">Site-wide</option></select></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="primary" onclick="createCountSource()">Add source</button>
+          </div>
+          <p class="small" id="countsAddStatus"></p>
+        </div>
       </section>
       <section id="tab-data" class="hidden"><div class="row"><button onclick="loadPois()">POIs</button><button onclick="loadSurveyPaths()">Survey Paths</button><button class="primary" onclick="startAddPoi()">+ POI</button></div><br /><div id="dataList" class="list"></div></section>
       <section id="tab-access" class="hidden">
@@ -1586,7 +1613,7 @@ function setSelected(kind,id){selectedKind=kind; selectedId=id;}
 function pct(n){return (n*100).toFixed(2)+'%'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n3(v){return Number(v??0).toFixed(3)} function n4(v){return Number(v??0).toFixed(4)}
-function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',sim:'Crowd Sim',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(typeof onSimTabChange==='function')onSimTabChange(tab); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration'){loadAnchors(); syncMapScaleForm(); updateMapFileStatus();} if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout(); if(tab==='sim'&&typeof loadSimPanel==='function')loadSimPanel(); drawBase();}
+function setTab(tab, autoLoad=true){currentTab=tab; document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab)); document.querySelectorAll('[id^="tab-"]').forEach(s=>s.classList.add('hidden')); document.getElementById('tab-'+tab).classList.remove('hidden'); document.getElementById('toolTitle').textContent={overview:'Overview',wifi:'Wi-Fi Heatmaps',deviceSweeps:'Device Sweeps',remoteSurvey:'Remote Survey',calibration:'Calibration',access:'Access Control',sim:'Crowd Sim',counts:'Live Counts',data:'POIs / Survey',messages:'Messages'}[tab]||tab; clearOverlay(); if(typeof updateAccessMapPanel==='function')updateAccessMapPanel(); if(typeof onSimTabChange==='function')onSimTabChange(tab); if(typeof onCountsTabChange==='function')onCountsTabChange(tab); if(!autoLoad)return; if(tab==='wifi')loadWifiSweeps(); if(tab==='deviceSweeps')loadDeviceSweeps(); if(tab==='calibration'){loadAnchors(); syncMapScaleForm(); updateMapFileStatus();} if(tab==='data')loadPois(); if(tab==='messages')loadMessageBoard(); if(tab==='access'&&typeof loadAccessLayout==='function')loadAccessLayout(); if(tab==='sim'&&typeof loadSimPanel==='function')loadSimPanel(); drawBase();}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 function marker(x,y,cls,title,onclick){const el=document.createElement('div'); el.className='marker '+cls; if(selectedKind&&title&&title.includes(selectedId)){el.classList.add('selected'); if(dashSearchMatches.length)el.classList.add('searchHit');} el.style.left=pct(x); el.style.top=pct(y); el.title=title||''; if(onclick){el.onclick=(ev)=>{ev.stopPropagation(); onclick();};} getMapStage().appendChild(el); return el;}
 function wifiColor(rssi){if(rssi>=-50)return '#00e676'; if(rssi>=-60)return '#9cff57'; if(rssi>=-67)return '#ffeb3b'; if(rssi>=-75)return '#ff9800'; return '#ff1744'}
@@ -1807,6 +1834,7 @@ init().catch(e=>setStatus('Startup failed: '+e.message));
 </script>
 <script src="/static/dash/access-control.js?v=3.19.0"></script>
 <script src="/static/dash/crowd-sim.js?v=1.8.0"></script>
+<script src="/static/dash/crowd-counts.js?v=1.0.0"></script>
 </body>
 </html>
 '''
