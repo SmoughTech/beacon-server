@@ -1,0 +1,15 @@
+# Crowd-counter subproject (runs separately from beacon-server).
+# Inference only needs numpy + pillow + requests. Torch is optional but
+# required to run the real CSRNet model (the fallback estimator runs without it).
+
+numpy
+pillow
+requests
+
+# Real density model (CSRNet). Install to run/train an actual trained model.
+# On a machine with CUDA, install the matching torch build from pytorch.org.
+torch
+torchvision
+
+# Training only.
+scipy
