@@ -38,6 +38,7 @@ from map_scale import (
     scanner_scale_percent,
     tile_size_ft_for_map,
 )
+from camera_counting import init_camera_counting_db, register_camera_counting
 from scanners_db import SCANNERS_TABLE, migrate_scanners_schema
 from sim_engine import register_sim_engine
 from sim_layout import register_sim_layout
@@ -947,6 +948,7 @@ def init_db():
 
         init_access_control_db(conn)
         init_events_schema(conn)
+        init_camera_counting_db(conn)
 
         conn.commit()
 
@@ -1100,6 +1102,7 @@ def startup():
 
 
 register_access_control(app, get_connection, now_iso)
+register_camera_counting(app, get_connection, now_iso)
 
 
 @app.get("/")
@@ -1119,6 +1122,7 @@ def health():
         beacon_count = conn.execute("SELECT COUNT(*) AS count FROM quickfinder_beacons").fetchone()["count"]
         scanner_count = conn.execute(f"SELECT COUNT(*) AS count FROM {SCANNERS_TABLE}").fetchone()["count"]
         wifi_sweep_count = conn.execute("SELECT COUNT(*) AS count FROM wifi_sweeps").fetchone()["count"]
+        count_source_count = conn.execute("SELECT COUNT(*) AS count FROM count_sources").fetchone()["count"]
         event_maps = conn.execute(
             f"SELECT map_name FROM {EVENTS_TABLE} ORDER BY name COLLATE NOCASE ASC"
         ).fetchall()
@@ -1130,6 +1134,7 @@ def health():
         "beacon_count": beacon_count,
         "scanner_count": scanner_count,
         "wifi_sweep_count": wifi_sweep_count,
+        "count_source_count": count_source_count,
         "maps": [map_file_status(row["map_name"]) for row in event_maps],
         "time": now_iso(),
     }
