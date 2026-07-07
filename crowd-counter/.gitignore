@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Trained model weights / checkpoints (large binaries)
+*.pth
+*.pt
+*.ckpt
+*.tar
+
+# Datasets and generated manifests / frames
+data/
+datasets/
+frames/
+*.mat
+
+# Self-test / run artifacts
+selftest_out.txt
+*.log

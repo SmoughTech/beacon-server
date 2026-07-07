@@ -22,6 +22,7 @@ together (the sum is the total).
 | `beacon_client.py` | Pushes results to beacon-server's contract |
 | `run.py` | CLI (single image / folder / repeating interval) |
 | `train.py` | Train CSRNet on your point-annotated images |
+| `datasets.py` | Convert ShanghaiTech / UCF-QNRF `.mat` annotations into a manifest |
 | `selftest.py` | Offline smoke test (no torch, no network) |
 
 ## Quick start
@@ -77,8 +78,13 @@ before sending so they land correctly on the site map.
 
 ## Training on your annotated data
 
+> Training needs an NVIDIA GPU (≥8GB VRAM) to be practical; CPU training is not
+> viable. Inference (`run.py`) runs fine on CPU. A common workflow is to train
+> in the cloud (Colab/RunPod/Vast/Lambda) or on a desktop GPU, then run inference
+> locally.
+
 Density counters are trained on **head-point annotations** (one dot per person).
-Put your labels in a JSON manifest:
+Put your labels in a JSON manifest (paths are relative to the manifest file):
 
 ```json
 [
@@ -87,13 +93,36 @@ Put your labels in a JSON manifest:
 ]
 ```
 
+### Building a manifest from a public dataset
+
+`datasets.py` converts ShanghaiTech / UCF-QNRF `.mat` annotations into the
+manifest above (and can carve off a deterministic validation split):
+
 ```bash
-python train.py --manifest data/train.json --val data/val.json \
-  --epochs 100 --sigma 15 --out csrnet.pth
+# ShanghaiTech Part B train split, hold out 10% for validation:
+python datasets.py --root path/to/ShanghaiTech/part_B/train_data \
+  --out data/train.json --val-out data/val.json --val-frac 0.1 --seed 0
+
+# UCF-QNRF:
+python datasets.py --root path/to/UCF-QNRF/Train --out data/train.json
 ```
 
-`train.py` builds Gaussian density targets, trains CSRNet, and (with `--val`)
-saves the best model by MAE. Tips:
+### Running training
+
+```bash
+python train.py --manifest data/train.json --val data/val.json \
+  --epochs 100 --sigma 15 --crop 512 --out csrnet.pth
+
+# Fine-tune an existing checkpoint on in-domain frames (lower LR):
+python train.py --manifest data/festival.json --resume csrnet.pth \
+  --lr 1e-6 --epochs 30 --out csrnet_festival.pth
+```
+
+`train.py` builds Gaussian density targets, shuffles each epoch, augments with
+random `--crop`-sized patches (aligned to the model stride; `--crop 0` = full
+image) and horizontal flips (`--flip-prob`), trains CSRNet, and (with `--val`)
+saves the best model by MAE. `--seed` makes runs reproducible; `--resume` loads
+weights to continue/fine-tune. Tips:
 - **Match the deployment domain.** Fine-tune on frames that look like the CCTV
   you'll run on (angle, resolution, lighting). A few hundred in-domain frames
   beat thousands of mismatched ones.

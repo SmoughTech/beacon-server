@@ -12,11 +12,14 @@ Manifest format (points are pixel coords in the original image):
       ...
     ]
 
-Paths in "image" are resolved relative to the manifest file's directory.
+Paths in "image" are resolved relative to the manifest file's directory. Use
+``datasets.py`` to generate this manifest from ShanghaiTech / UCF-QNRF ``.mat``
+annotations.
 
 Usage:
     python train.py --manifest data/train.json --epochs 100 --out csrnet.pth
     python train.py --manifest data/train.json --val data/val.json --out csrnet.pth
+    python train.py --manifest data/train.json --resume csrnet.pth --lr 1e-6  # fine-tune
 """
 
 from __future__ import annotations
@@ -42,7 +45,13 @@ def load_manifest(path: str):
 
 def make_density_target(size_wh, points, sigma: float, stride: int) -> np.ndarray:
     """Full-res Gaussian density, then block-summed to 1/stride resolution."""
-    from scipy.ndimage import gaussian_filter
+    try:
+        from scipy.ndimage import gaussian_filter
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ImportError(
+            "scipy is required to build density targets for training "
+            "(pip install scipy)."
+        ) from exc
 
     w, h = size_wh
     pts = np.zeros((h, w), dtype=np.float32)
@@ -64,7 +73,46 @@ def preprocess_image(img: Image.Image) -> np.ndarray:
     return arr.transpose(2, 0, 1)
 
 
+def random_crop_flip(
+    x: np.ndarray,
+    target: np.ndarray,
+    stride: int,
+    crop: int,
+    rng: np.random.Generator,
+    flip_prob: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample an aligned random crop (+ optional h-flip) of the image/target pair.
+
+    ``x`` is ``(3, H, W)`` and ``target`` is ``(H//stride, W//stride)``. The crop
+    is aligned to ``stride`` so the density target stays consistent (its sum over
+    the crop equals the head count inside the crop). ``crop <= 0`` disables
+    cropping (full image). Returns contiguous float32 arrays (torch cannot take
+    the negative strides a flipped view produces).
+    """
+    _, H, W = x.shape
+    ch = cw = max(stride, (int(crop) // stride) * stride) if crop and crop > 0 else 0
+
+    if ch and cw and ch < H and cw < W:
+        oy = int(rng.integers(0, (H - ch) // stride + 1))
+        ox = int(rng.integers(0, (W - cw) // stride + 1))
+        y0, x0 = oy * stride, ox * stride
+        xc = x[:, y0 : y0 + ch, x0 : x0 + cw]
+        tc = target[oy : oy + ch // stride, ox : ox + cw // stride]
+    else:
+        xc, tc = x, target
+
+    if flip_prob and rng.random() < flip_prob:
+        xc = xc[:, :, ::-1]
+        tc = tc[:, ::-1]
+
+    return (
+        np.ascontiguousarray(xc, dtype=np.float32),
+        np.ascontiguousarray(tc, dtype=np.float32),
+    )
+
+
 def iterate(manifest, sigma, stride):
+    """Yield (preprocessed_image, density_target, gt_count) for full images."""
     for item in manifest:
         try:
             img = Image.open(item["_abs"]).convert("RGB")
@@ -102,36 +150,97 @@ def main(argv=None) -> int:
     p.add_argument("--lr", type=float, default=1e-5)
     p.add_argument("--sigma", type=float, default=15.0, help="Gaussian kernel sigma (px)")
     p.add_argument("--device", default=None)
+    p.add_argument(
+        "--crop",
+        type=int,
+        default=512,
+        help="Random crop size in px per training step (0 = full image). "
+        "Smaller crops cut VRAM and add augmentation; aligned to model stride.",
+    )
+    p.add_argument(
+        "--crops-per-image",
+        type=int,
+        default=1,
+        help="Random crops sampled from each image per epoch",
+    )
+    p.add_argument(
+        "--flip-prob",
+        type=float,
+        default=0.5,
+        help="Horizontal-flip augmentation probability (0 disables)",
+    )
+    p.add_argument("--seed", type=int, default=0, help="RNG seed for reproducibility")
+    p.add_argument(
+        "--resume",
+        default=None,
+        help="Resume/fine-tune from an existing .pth (skips VGG frontend download)",
+    )
     args = p.parse_args(argv)
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     stride = OUTPUT_STRIDE
+
+    rng = np.random.default_rng(args.seed)
+    torch.manual_seed(args.seed)
+
     train = load_manifest(args.manifest)
     val = load_manifest(args.val) if args.val else None
-    print(f"[train] {len(train)} images on {device}")
+    print(
+        f"[train] {len(train)} images on {device} "
+        f"(crop={args.crop or 'full'}, crops/img={max(1, args.crops_per_image)}, "
+        f"flip_p={args.flip_prob}, seed={args.seed})"
+    )
 
-    net = build_csrnet()(load_vgg_frontend=True).to(device)
+    net = build_csrnet()(load_vgg_frontend=args.resume is None).to(device)
+    if args.resume:
+        state = torch.load(args.resume, map_location="cpu")
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        net.load_state_dict(state, strict=False)
+        print(f"[train] resumed weights from {args.resume}")
+
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
     loss_fn = nn.MSELoss(reduction="sum")
+
+    # Density targets are small (stride-res) and expensive to build (Gaussian on
+    # full-res points), so cache them across epochs; images are reloaded per epoch.
+    target_cache: dict[str, np.ndarray] = {}
 
     best = float("inf")
     for epoch in range(1, args.epochs + 1):
         net.train()
+        order = list(range(len(train)))
+        rng.shuffle(order)
         running = 0.0
         count = 0
-        for x, target, _gt in iterate(train, args.sigma, stride):
-            xt = torch.from_numpy(x).unsqueeze(0).to(device)
-            tt = torch.from_numpy(target).unsqueeze(0).unsqueeze(0).to(device)
-            pred = net(xt)
-            # Align spatial dims (rounding can differ by 1).
-            th = min(pred.shape[2], tt.shape[2])
-            tw = min(pred.shape[3], tt.shape[3])
-            loss = loss_fn(pred[:, :, :th, :tw], tt[:, :, :th, :tw])
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-            running += float(loss.item())
-            count += 1
+        for idx in order:
+            item = train[idx]
+            try:
+                img = Image.open(item["_abs"]).convert("RGB")
+            except Exception as exc:
+                print(f"[skip] {item['_abs']}: {exc}")
+                continue
+            x = preprocess_image(img)
+            key = item["_abs"]
+            target = target_cache.get(key)
+            if target is None:
+                target = make_density_target(img.size, item.get("points", []), args.sigma, stride)
+                target_cache[key] = target
+
+            for _ in range(max(1, args.crops_per_image)):
+                xc, tc = random_crop_flip(x, target, stride, args.crop, rng, args.flip_prob)
+                xt = torch.from_numpy(xc).unsqueeze(0).to(device)
+                tt = torch.from_numpy(tc).unsqueeze(0).unsqueeze(0).to(device)
+                pred = net(xt)
+                # Align spatial dims (rounding can differ by 1).
+                th = min(pred.shape[2], tt.shape[2])
+                tw = min(pred.shape[3], tt.shape[3])
+                loss = loss_fn(pred[:, :, :th, :tw], tt[:, :, :th, :tw])
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+                running += float(loss.item())
+                count += 1
 
         msg = f"[epoch {epoch}/{args.epochs}] loss={running / max(1, count):.2f}"
         if val:
