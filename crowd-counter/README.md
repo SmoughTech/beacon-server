@@ -122,7 +122,16 @@ python train.py --manifest data/festival.json --resume csrnet.pth \
 random `--crop`-sized patches (aligned to the model stride; `--crop 0` = full
 image) and horizontal flips (`--flip-prob`), trains CSRNet, and (with `--val`)
 saves the best model by MAE. `--seed` makes runs reproducible; `--resume` loads
-weights to continue/fine-tune. Tips:
+weights to continue/fine-tune.
+
+### Training in the cloud (RunPod)
+
+No local GPU? [`cloud/RUNPOD.md`](cloud/RUNPOD.md) is a step-by-step guide, and
+[`cloud/runpod_train.sh`](cloud/runpod_train.sh) is a one-command, spot-safe
+bootstrap that installs deps, builds the manifest, smoke-tests, and trains
+(auto-resuming if the pod restarts). A full run is a few hours for a few dollars.
+
+Tips:
 - **Match the deployment domain.** Fine-tune on frames that look like the CCTV
   you'll run on (angle, resolution, lighting). A few hundred in-domain frames
   beat thousands of mismatched ones.
