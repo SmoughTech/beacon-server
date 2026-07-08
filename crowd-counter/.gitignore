@@ -20,3 +20,6 @@ frames/
 # Self-test / run artifacts
 selftest_out.txt
 *.log
+
+# Local tooling binary
+runpodctl.exe
