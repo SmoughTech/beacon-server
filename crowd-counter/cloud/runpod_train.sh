@@ -71,7 +71,13 @@ if ! python -c "import torch" 2>/dev/null; then
   log "torch not found -> installing (prefer a RunPod PyTorch template to get the right CUDA build)"
   python -m pip install --quiet torch torchvision
 fi
-python -c "import torch; print('[runpod] torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
+# torchvision provides the VGG16 frontend CSRNet initializes from; ensure it is
+# present even when the base image ships torch without it.
+python -c "import torchvision" 2>/dev/null || {
+  log "torchvision missing -> installing"
+  python -m pip install --quiet torchvision
+}
+python -c "import torch, torchvision; print('[runpod] torch', torch.__version__, 'torchvision', torchvision.__version__, '| cuda available:', torch.cuda.is_available())"
 
 # 2) Optional dataset download.
 if [ -n "$DATASET_URL" ] && [ -z "$DATASET_ROOT" ]; then
