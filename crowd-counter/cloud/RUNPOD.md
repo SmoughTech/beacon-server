@@ -33,14 +33,17 @@ analog to fixed festival CCTV. Easiest is Kaggle:
 
 ```bash
 pip install -q kaggle
-mkdir -p ~/.kaggle && cp /workspace/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
+# New-style Kaggle token: set it as an env var (ideally a RunPod Secret, so it
+# is never written to disk or committed). Do NOT paste it into a tracked file.
+export KAGGLE_API_TOKEN=<your-token>
 kaggle datasets download -d tthien/shanghaitech -p /workspace --unzip
 # -> /workspace/ShanghaiTech/part_B/train_data/{images,ground-truth}
 ```
 
-(Upload your `kaggle.json` API token to `/workspace` first, from your Kaggle
-account settings. Any other point-annotated set works too — see the layout notes
-in `datasets.py`.)
+If you have the older `kaggle.json` (username + key) instead, use
+`mkdir -p ~/.kaggle && cp kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json`.
+Either way, treat the token like a password — rotate it if it ever leaks. Any
+other point-annotated dataset works too; see the layout notes in `datasets.py`.
 
 ## 3. Train
 
