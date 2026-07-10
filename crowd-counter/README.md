@@ -21,6 +21,8 @@ together (the sum is the total).
 | `pipeline.py` | Image → `count` + normalized heatmap `cells` |
 | `beacon_client.py` | Pushes results to beacon-server's contract |
 | `run.py` | CLI (single image / folder / repeating interval) |
+| `server.py` | **HTTP inference service** for the Beacon `/count` panel (density on posted frames) |
+| `tracker.py` | Line-crossing (tripwire) geometry + detector/tracker plan (in/out counting) |
 | `train.py` | Train CSRNet on your point-annotated images |
 | `datasets.py` | Convert ShanghaiTech / UCF-QNRF `.mat` annotations into a manifest |
 | `selftest.py` | Offline smoke test (no torch, no network) |
@@ -51,6 +53,49 @@ should appear.
 > and an **untrained** counting head, so the numbers are meaningless. Either pass
 > trained weights, or (with no torch installed) the **fallback** estimator runs —
 > also not accurate. Real numbers require training (below).
+
+## Live counting from the Beacon `/count` panel
+
+The Beacon web panel at **`/count`** lets an operator pick a camera feed (local
+webcam, screen share, IP camera, or still image), draw **zones** and **threshold
+lines** on the frame, and watch live counts. The panel captures frames in the
+browser and sends them to this project's **inference service** for the actual CV.
+
+Start the service (separate from beacon-server; put it on a GPU box if you have
+one):
+
+```bash
+pip install -r requirements-server.txt          # fastapi, uvicorn, multipart
+python server.py --weights csrnet.pth --host 0.0.0.0 --port 8100
+```
+
+Then in the panel click **Inference URL** and point it at `http://<this-box>:8100`.
+Endpoints:
+
+| Method / path | Purpose |
+|---|---|
+| `GET /health` | model + device status |
+| `POST /infer/density` | multipart `image` → `{count, cells, grid_cols, grid_rows}` (CSRNet) |
+| `POST /infer/track` | line-crossing in/out — **not implemented yet** (returns 501, see below) |
+
+### Two capabilities, two models
+
+* **On-screen count (density)** — CSRNet. Answers *how many people are visible*
+  right now, and *where* (heatmap). This is what your trained model does. Live in
+  the panel today via `/infer/density`.
+* **Line crossing (in/out ledger)** — needs a **person detector + multi-object
+  tracker** (e.g. YOLO + ByteTrack) plus tripwire logic, because you must follow
+  each individual across frames to know they crossed. CSRNet **cannot** do this.
+  The tripwire geometry is implemented and unit-testable in `tracker.py`; the
+  detector/tracker step is scaffolded with a concrete plan there. Until it ships,
+  the panel lets you push crossings manually (`+In` / `+Out`) so the occupancy
+  ledger is usable, and each crossing updates the line's in/out totals via
+  `POST /events/{event_id}/camera-feeds/{feed_id}/lines/{line_id}/crossings`.
+
+> IP cameras: browsers can't open RTSP and often taint cross-origin frames. Use
+> an MJPEG/JPEG-snapshot HTTP URL in the browser, or (better for RTSP) have the
+> inference box pull the stream server-side — that's what the `tracker.py`
+> pipeline is designed to do.
 
 ## Live video / repeating frames
 

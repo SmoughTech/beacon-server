@@ -1,0 +1,11 @@
+# Inference HTTP service (server.py) for the Beacon /count panel.
+# Install alongside requirements.txt (numpy/pillow + torch for the real model).
+
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Line-crossing pipeline (tracker.py) -- optional, only needed once you enable
+# detector+tracker based in/out counting. Heavy; install when you get there.
+# ultralytics
+# opencv-python
