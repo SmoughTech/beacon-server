@@ -32,7 +32,14 @@ Notes
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+
+# On Windows the default OpenCV camera backend (MSMF) frequently opens a webcam
+# but fails to read frames. Prefer DirectShow, which is reliable for USB/laptop
+# cams. Set before OpenCV is imported (ultralytics pulls it in). Harmless on
+# non-Windows. Override by exporting OPENCV_VIDEOIO_PRIORITY_MSMF yourself.
+os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_MSMF", "0")
 
 
 def parse_args(argv=None):
