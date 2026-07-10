@@ -22,7 +22,8 @@ together (the sum is the total).
 | `beacon_client.py` | Pushes results to beacon-server's contract |
 | `run.py` | CLI (single image / folder / repeating interval) |
 | `server.py` | **HTTP inference service** for the Beacon `/count` panel (density on posted frames) |
-| `tracker.py` | Line-crossing (tripwire) geometry + detector/tracker plan (in/out counting) |
+| `tracker.py` | Line-crossing (tripwire) geometry + YOLO/ByteTrack pipeline (in/out counting) |
+| `track_runner.py` | CLI: run the line-crossing counter on a webcam/RTSP/file and push crossings |
 | `train.py` | Train CSRNet on your point-annotated images |
 | `datasets.py` | Convert ShanghaiTech / UCF-QNRF `.mat` annotations into a manifest |
 | `selftest.py` | Offline smoke test (no torch, no network) |
@@ -83,19 +84,42 @@ Endpoints:
 * **On-screen count (density)** — CSRNet. Answers *how many people are visible*
   right now, and *where* (heatmap). This is what your trained model does. Live in
   the panel today via `/infer/density`.
-* **Line crossing (in/out ledger)** — needs a **person detector + multi-object
-  tracker** (e.g. YOLO + ByteTrack) plus tripwire logic, because you must follow
-  each individual across frames to know they crossed. CSRNet **cannot** do this.
-  The tripwire geometry is implemented and unit-testable in `tracker.py`; the
-  detector/tracker step is scaffolded with a concrete plan there. Until it ships,
-  the panel lets you push crossings manually (`+In` / `+Out`) so the occupancy
-  ledger is usable, and each crossing updates the line's in/out totals via
-  `POST /events/{event_id}/camera-feeds/{feed_id}/lines/{line_id}/crossings`.
+* **Line crossing (in/out ledger)** — a **person detector + multi-object
+  tracker** (YOLO + ByteTrack) plus tripwire logic, because you must follow each
+  individual across frames to know they crossed. CSRNet **cannot** do this, so
+  it's a separate pipeline (`tracker.py` / `track_runner.py`). You can also push
+  crossings manually (`+In` / `+Out`) in the panel while testing.
 
-> IP cameras: browsers can't open RTSP and often taint cross-origin frames. Use
-> an MJPEG/JPEG-snapshot HTTP URL in the browser, or (better for RTSP) have the
-> inference box pull the stream server-side — that's what the `tracker.py`
-> pipeline is designed to do.
+### Running the line-crossing counter
+
+```bash
+pip install -r requirements-tracker.txt          # ultralytics (YOLO+ByteTrack) + opencv
+
+# 1) In the /count panel, add the feed and draw a threshold line across the entrance.
+# 2) Point the tracker at the same feed id and a video source:
+python track_runner.py --event-id test_fest --feed-id feed_abc123 --source 0          # webcam
+python track_runner.py --event-id test_fest --feed-id feed_abc123 \
+    --source "rtsp://user:pass@192.168.1.50:554/stream1" --model yolo11s.pt           # IP cam
+```
+
+The runner loads the feed's lines from Beacon (refreshing every ~30 s so panel
+edits apply live), tracks each person's foot point, and POSTs a directional
+crossing whenever a track crosses a line. Occupancy = in − out.
+
+**Model recommendation — Ultralytics YOLO11, person class only:**
+
+| Weights | When | Compute |
+|---|---|---|
+| `yolo11n.pt` | single feed, sparse entrance (default) | CPU-friendly |
+| `yolo11s.pt` | busier entrance, better recall | light GPU |
+| `yolo11m.pt` | high mount / crowded gate | GPU |
+
+Detectors saturate in very dense crowds, so put tripwires at **entrances**
+(countable flow) and keep **CSRNet density** for the packed interior.
+
+> IP cameras: browsers can't open RTSP and often taint cross-origin frames. In
+> the browser use an MJPEG/JPEG-snapshot HTTP URL; for RTSP, run `track_runner.py`
+> on a box that can reach the camera — it pulls the stream server-side.
 
 ## Live video / repeating frames
 

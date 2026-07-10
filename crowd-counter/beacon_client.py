@@ -62,3 +62,58 @@ class BeaconClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    # ----- camera feeds / tripwire lines (camera_feeds.py contract) -------- #
+    def list_feeds(self) -> list[dict]:
+        resp = requests.get(self._url("/camera-feeds"), timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_lines(self, feed_id: str) -> list[dict]:
+        """Tripwire lines defined for a feed (frame-normalized endpoints)."""
+        resp = requests.get(
+            self._url(f"/camera-feeds/{feed_id}/lines"), timeout=self.timeout
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def post_crossing(
+        self,
+        feed_id: str,
+        line_id: str,
+        direction: str,
+        track_id: Optional[str] = None,
+        captured_at: Optional[str] = None,
+    ) -> dict:
+        """Record one directional line crossing; updates the line's in/out ledger."""
+        body: dict = {"direction": direction}
+        if track_id is not None:
+            body["track_id"] = str(track_id)
+        if captured_at is not None:
+            body["captured_at"] = captured_at
+        resp = requests.post(
+            self._url(f"/camera-feeds/{feed_id}/lines/{line_id}/crossings"),
+            json=body,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def push_feed_density(
+        self,
+        feed_id: str,
+        heads: int,
+        cells: Optional[list[dict]] = None,
+        confidence: Optional[float] = None,
+    ) -> dict:
+        """Push a live density result onto a camera feed (for the /count panel)."""
+        body: dict = {"heads": int(heads), "cells": cells or []}
+        if confidence is not None:
+            body["confidence"] = float(confidence)
+        resp = requests.put(
+            self._url(f"/camera-feeds/{feed_id}/density"),
+            json=body,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()

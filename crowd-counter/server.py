@@ -65,6 +65,11 @@ app.add_middleware(
 )
 
 
+def _tracker_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("ultralytics") is not None
+
+
 @app.get("/health")
 def health():
     return {
@@ -72,7 +77,7 @@ def health():
         "model": _MODEL_TAG,
         "device": getattr(_MODEL, "device", None) and str(_MODEL.device),
         "weights": _CONFIG["weights"],
-        "tracker": "not_implemented",
+        "tracker": "available" if _tracker_available() else "not_installed",
     }
 
 
@@ -107,17 +112,24 @@ async def infer_density(image: UploadFile = File(...)):
 
 @app.post("/infer/track")
 async def infer_track(image: UploadFile = File(...)):
-    """Line-crossing detection+tracking. Not implemented yet.
+    """Stateless per-frame tracking is intentionally NOT served here.
 
-    See tracker.py for the design. Requires a person detector + multi-object
-    tracker, which is a separate model from the CSRNet density estimator.
+    Line crossing needs persistent per-track state across a continuous video
+    stream (ByteTrack), which doesn't fit a stateless per-frame HTTP call. Run
+    the dedicated streaming process instead:
+
+        python track_runner.py --event-id <id> --feed-id <feed> --source <rtsp|0|file>
+
+    It pulls the stream (RTSP included), tracks people, and posts crossings to
+    Beacon directly. See tracker.py.
     """
     raise HTTPException(
         status_code=501,
         detail=(
-            "Line-crossing tracking is not implemented. It needs a person "
-            "detector + tracker (e.g. YOLO + ByteTrack), not the density model. "
-            "See crowd-counter/tracker.py for the plan."
+            "Use track_runner.py for line crossing (stateful streaming). "
+            "The tracker is "
+            + ("installed" if _tracker_available() else "NOT installed: pip install -r requirements-tracker.txt")
+            + "."
         ),
     )
 

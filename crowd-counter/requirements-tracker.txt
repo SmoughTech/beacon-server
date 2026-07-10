@@ -1,0 +1,10 @@
+# Line-crossing (in/out) counter: person detector + tracker + tripwire.
+# Used by track_runner.py / tracker.py. Heavier than the density model.
+#
+# Ultralytics bundles YOLO detectors + ByteTrack/BoT-SORT trackers and pulls in
+# torch + opencv. On a CUDA box, install the matching torch build first from
+# pytorch.org, then these.
+
+ultralytics>=8.3.0
+opencv-python
+requests
